@@ -3,12 +3,14 @@ import os
 import sys
 import numpy as np
 import cv2  # Added for native BGR/JPG conversions
+import time
 from picamera2 import Picamera2
 from dataclasses import dataclass
 from contextlib import contextmanager
 from gpiozero import LED
 
 OUTPUT_DIR = "./images"
+is_standard_capture_enabled = True
 
 # Export mode configuration switch: "jpg", "array", or "hypercube"
 EXPORT_MODE = "jpg"  
@@ -59,6 +61,16 @@ def ensure_directory(path: str):
     if not os.path.exists(path):
         os.makedirs(path)
 
+def acquire_standard_photo(camera: Picamera2, config) -> list[tuple[str, np.ndarray]]:
+    print("Acquiring standard photo. Allowing ISP to meter the scene...")
+    camera.set_controls({
+        "AeEnable": True,
+        "AwbEnable": True
+    })
+    time.sleep(1.5)     
+    frame_array = camera.capture_array("main")
+    return [("standard", frame_array)]
+
 def acquire_spectral_cube(camera: Picamera2, config) -> list[tuple[str, np.ndarray]]:
     """
     RESPONSIBILITY: Pure Hardware Acquisition.
@@ -73,7 +85,7 @@ def acquire_spectral_cube(camera: Picamera2, config) -> list[tuple[str, np.ndarr
                     "ExposureTime": channel.exposure_time_us,
                     "AnalogueGain": channel.analogue_gain
                 })
-                camera.switch_mode(config)
+                # camera.switch_mode(config)
                 
                 # Fetch raw 3D array: (Height, Width, Channels)
                 frame_array = camera.capture_array("main")
@@ -134,7 +146,10 @@ def main():
         camera.configure(config)
         camera.set_controls(DEFAULT_CAMERA_SETTINGS)
         camera.start()
-        layers = acquire_spectral_cube(camera, config)        
+        if is_standard_capture_enabled:
+            layers = acquire_standard_photo(camera, config)
+        else:
+            layers = acquire_spectral_cube(camera, config)
         export_data(layers, OUTPUT_DIR, EXPORT_MODE)
 
     except Exception as e:

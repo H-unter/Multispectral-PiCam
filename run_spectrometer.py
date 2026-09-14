@@ -12,7 +12,7 @@ def execute_hardware_scan():
     # Instantiating connects immediately to the device over USB HID
     print("Connecting to TI DLP NIRscan Nano...")
     scanner = NIRS()
-    
+    scanner.clear_error_status()  # (Check NIRS.py for the exact method name!)
     print("Energising lamp and executing spectral scan block...")
     # The scan method handles micromirror matrix transformations and reads the ADC
     raw_results = scanner.scan()
