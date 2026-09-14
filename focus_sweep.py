@@ -12,7 +12,6 @@ def ensure_directory(path: str):
 
 def main():
     ensure_directory(OUTPUT_DIR)
-    
     if not Picamera2.global_camera_info():
         print("\n[ERROR] Camera hardware connection failure", file=sys.stderr)
         sys.exit(1)
@@ -42,11 +41,8 @@ def main():
             camera.set_controls({
                 "AfMode": 0,          # 0 = Manual Focus lock
                 "LensPosition": focus_val
-            })
-            
-            # CRITICAL: The physical lens motor needs a fraction of a second to move and settle
+            })            
             time.sleep(0.5) 
-            
             # Capture directly to file
             filename = os.path.join(OUTPUT_DIR, f"focus_step_{focus_val:.1f}.jpg")
             camera.capture_file(filename)
