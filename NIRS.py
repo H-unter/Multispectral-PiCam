@@ -1,1 +1,0 @@
-./NIRScanner-Python/NIRS.py
