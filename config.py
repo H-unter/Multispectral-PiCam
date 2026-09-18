@@ -19,19 +19,19 @@ SPECTRAL_CHANNELS = SpectralChannelCollection([
         name="green_led",
         led=LED_LOOKUP_TABLE['green_led'],
         driver=LedDrivingSettings(gpio_pin=17, drive_current_ma=500),
-        camera=CameraSettings(exposure_time_us=1000000, analogue_gain=1.0)
+        camera=CameraSettings(exposure_time_us=10000, analogue_gain=1.0)
     ),
     SpectralChannel(
         name="red_led_1",
         led=LED_LOOKUP_TABLE['red_led_1'],
         driver=LedDrivingSettings(gpio_pin=27, drive_current_ma=500),
-        camera=CameraSettings(exposure_time_us=1000000, analogue_gain=1.0)
+        camera=CameraSettings(exposure_time_us=10000, analogue_gain=1.0)
     ),
     SpectralChannel(
         name="red_led_2",
         led=LED_LOOKUP_TABLE['red_led_2'],
         driver=LedDrivingSettings(gpio_pin=22, drive_current_ma=500),
-        camera=CameraSettings(exposure_time_us=1000000, analogue_gain=1.0)
+        camera=CameraSettings(exposure_time_us=10000, analogue_gain=1.0)
     )
 ])
 

@@ -6,7 +6,6 @@ import logging
 import os
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
 from typing import Callable
 
 import cv2
@@ -15,21 +14,31 @@ from gpiozero import LED
 from picamera2 import Picamera2
 
 from config import SPECTRAL_CHANNELS, DEFAULT_CAMERA_SETTINGS
-from models import CameraSettings, SpectralChannel
+from models import CameraSettings, MultispectralImage, SpectralChannel
 
 logger = logging.getLogger(__name__)
 _SHARED_LEDS = {}
 
-@dataclass
 class RuntimeChannel:
-    config: SpectralChannel
-    led: LED | None
+    """Bind a spectral-channel configuration to its GPIOZero LED hardware."""
+
+    def __init__(self, config: SpectralChannel) -> None:
+        self.config = config
+        pin = config.driver.gpio_pin
+
+        if pin is not None:
+            if pin not in _SHARED_LEDS:
+                _SHARED_LEDS[pin] = LED(pin)
+            self.led = _SHARED_LEDS[pin]
+        else:
+            self.led = None
 
 class CameraHardware:
     """Encapsulates the camera and lighting hardware, providing methods for setup, capture, and export."""
     def __init__(self) -> None:
         self.camera: Picamera2 | None = None
         self.runtime_channels: dict[str, RuntimeChannel] = {}
+        self.camera_resolution: tuple[int, int] | None = None
 
     @property
     def is_ready(self) -> bool:
@@ -38,22 +47,11 @@ class CameraHardware:
     def setup(self) -> None:
         try:
             for channel_config in SPECTRAL_CHANNELS:
-                pin = channel_config.driver.gpio_pin
-
-                if pin is not None:
-                    if pin not in _SHARED_LEDS:
-                        _SHARED_LEDS[pin] = LED(pin)
-                    led_instance = _SHARED_LEDS[pin]
-                else:
-                    led_instance = None
-
-                self.runtime_channels[channel_config.name] = RuntimeChannel(
-                    config=channel_config,
-                    led=led_instance,
-                )
+                runtime_channel = RuntimeChannel(channel_config)
+                self.runtime_channels[channel_config.name] = runtime_channel
 
             self.camera = Picamera2()
-            self.set_resolution(high_res=False)
+            self.set_resolution(high_res=True)
         except Exception:
             logger.exception("Camera hardware setup failed")
             self.teardown()
@@ -85,8 +83,9 @@ class CameraHardware:
 
         self.camera.stop()
         size = (4608, 2592) if high_res else (800, 600)
+        self.camera_resolution = size
         config = self.camera.create_preview_configuration(
-            main={"size": size}, buffer_count=2
+            main={"size": size, "format": "RGB888"}, buffer_count=2
         )
         self.camera.configure(config)
         
@@ -104,20 +103,34 @@ class CameraHardware:
         # Apply the updated setting
         self.camera.set_controls(DEFAULT_CAMERA_SETTINGS.to_control_dict())
 
+    def set_active_channel(self, channel_name: str | None) -> None:
+        """Enable one configured channel LED and switch all other LEDs off."""
+        if channel_name is not None and channel_name not in self.runtime_channels:
+            raise ValueError(f"Unknown spectral channel: {channel_name}")
+
+        for name, channel in self.runtime_channels.items():
+            if channel.led is None:
+                continue
+            if name == channel_name:
+                channel.led.on()
+            else:
+                channel.led.off()
+
     def capture_preview_jpeg(self, quality: int = 40) -> str | None:
         if self.camera is None:
             return None
         frame = self.camera.capture_array("main")
-        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        _, buffer = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         return base64.b64encode(buffer).decode("utf-8")
 
     @staticmethod
     def average_rgb_channels(frame: np.ndarray) -> np.ndarray:
-        """Reduce an RGB frame to one channel by averaging each pixel's colors."""
-        if frame.ndim != 3 or frame.shape[-1] != 3:
-            raise ValueError(f"Expected an RGB frame, received shape {frame.shape}")
-        return frame.mean(axis=-1)
+        """Reduce an RGB or XBGR8888 frame to one channel by averaging colors."""
+        if frame.ndim != 3 or frame.shape[-1] not in (3, 4):
+            raise ValueError(
+                f"Expected an RGB or four-channel frame, received shape {frame.shape}"
+            )
+        return frame[..., -3:].mean(axis=-1)
 
     def acquire_standard_photo(
         self,
@@ -132,13 +145,12 @@ class CameraHardware:
         time.sleep(1.0)
         
         frame = self.camera.capture_array("main")
-        processor = process_frame or self.average_rgb_channels
-        return [("standard", processor(frame))]
+        return [("standard", process_frame(frame) if process_frame else frame)]
 
     def acquire_spectral_cube(
         self,
         process_frame: Callable[[np.ndarray], np.ndarray] | None = None,
-    ) -> list[tuple[str, np.ndarray]]:
+    ) -> MultispectralImage:
         if self.camera is None:
             raise RuntimeError("Camera is not ready")
 
@@ -153,7 +165,13 @@ class CameraHardware:
                 frame = self.camera.capture_array("main")
                 captured_layers.append((band_name, processor(frame)))
                 
-        return captured_layers
+        image_height, image_width = captured_layers[0][1].shape
+        resolution = self.camera_resolution or (image_width, image_height)
+        return MultispectralImage.from_layers(
+            captured_layers,
+            channels=[channel.config for channel in self.runtime_channels.values()],
+            metadata={"camera": {"resolution": list(resolution)}},
+        )
 
     @staticmethod
     @contextmanager
@@ -170,8 +188,21 @@ class CameraHardware:
                 rt_channel.led.off()
 
     @staticmethod
-    def export_data(layers: list[tuple[str, np.ndarray]], target_dir: str, mode: str) -> None:
-        # (Export logic remains unchanged)
+    def export_data(
+        layers: MultispectralImage | list[tuple[str, np.ndarray]],
+        target_dir: str,
+        mode: str,
+    ) -> None:
+        if isinstance(layers, MultispectralImage):
+            if mode in {"hypercube", "npz"}:
+                layers.export_npz(os.path.join(target_dir, "multispectral_cube.npz"))
+            elif mode == "jpg":
+                layers.export_jpgs(target_dir)
+            else:
+                raise ValueError(f"Unknown export mode configuration variant: {mode}")
+            return
+
+        # Compatibility path for standard-photo callers.
         os.makedirs(target_dir, exist_ok=True)
         if mode == "hypercube":
             arrays = [matrix for _, matrix in layers]
@@ -187,8 +218,9 @@ class CameraHardware:
         elif mode == "jpg":
             for band_name, frame_matrix in layers:
                 output_file = os.path.join(target_dir, f"capture_{band_name}.jpg")
-                if frame_matrix.ndim == 3:
-                    frame_matrix = cv2.cvtColor(frame_matrix, cv2.COLOR_RGB2BGR)
+                if frame_matrix.ndim == 3 and frame_matrix.shape[-1] == 4:
+                    # Picamera2's four-channel frame has one leading padding byte.
+                    frame_matrix = frame_matrix[..., 1:]
                 cv2.imwrite(output_file, frame_matrix)
         else:
             raise ValueError(f"Unknown export mode configuration variant: {mode}")

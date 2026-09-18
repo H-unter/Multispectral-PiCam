@@ -3,26 +3,28 @@
 
 import os
 import sys
-
 from camera_hardware import CameraHardware
 
-
-OUTPUT_DIR = "./images"
+OUTPUT_DIR = "/images"
 EXPORT_MODE = "jpg"
-IS_STANDARD_CAPTURE_ENABLED = True
+IS_MULTISPECTRAL = True
 
 
+    
 def main() -> None:
     hardware = CameraHardware()
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
     try:
         hardware.setup()
-        if IS_STANDARD_CAPTURE_ENABLED:
-            layers = hardware.acquire_standard_photo()
+        if IS_MULTISPECTRAL:
+            image = hardware.acquire_spectral_cube()
+            if EXPORT_MODE in {"hypercube", "npz"}:
+                image.export_npz(os.path.join(OUTPUT_DIR, "multispectral_cube.npz"))
+            else:
+                image.export_jpgs(OUTPUT_DIR)
         else:
-            layers = hardware.acquire_spectral_cube()
-        hardware.export_data(layers, OUTPUT_DIR, EXPORT_MODE)
+            layers = hardware.acquire_standard_photo()
+            hardware.export_data(layers, OUTPUT_DIR, EXPORT_MODE)
     except Exception as error:
         print(f"\n[ERROR] Failed multispectral block acquisition: {error}", file=sys.stderr)
         sys.exit(1)

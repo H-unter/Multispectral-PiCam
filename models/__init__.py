@@ -5,10 +5,13 @@ from .LedDrivingSettings import LedDrivingSettings
 from .CameraSettings import CameraSettings
 from .SpectralChannel import SpectralChannel
 from .SpectralChannelCollection import SpectralChannelCollection
+from .MultispectralImage import MultispectralImage
 
 __all__ = [
     "LEDAttributes",
     "LedDrivingSettings",
     "CameraSettings",
-    "SpectralChannel"
+    "SpectralChannel",
+    "SpectralChannelCollection",
+    "MultispectralImage",
 ]
