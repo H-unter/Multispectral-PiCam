@@ -3,7 +3,7 @@ import logging
 import os
 from nicegui import app, ui
 
-from config import CHANNELS
+from config import SPECTRAL_CHANNELS
 from camera_hardware import CameraHardware 
 
 logger = logging.getLogger(__name__)
@@ -115,19 +115,14 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
 
     # --- PER LED CONFIG TAB ---
     with ui.tab_panel(led_tab).classes('w-full p-0'):
-        # Flex wrap allows cards to flow onto the next line if the screen is narrow
-        with ui.row().classes('w-full gap-4 flex-wrap items-stretch'):
-            
-            # Loop through the imported dataclasses
-            for channel in CHANNELS:
+        with ui.row().classes('w-full gap-4 flex-wrap items-stretch'):            
+            for channel in SPECTRAL_CHANNELS:
                 with ui.card().classes('flex-grow min-w-[300px] w-1/3'):
                     ui.label(channel.name).classes('text-xl font-bold text-blue-600 mb-2')
-                    
                     if channel.led:
                         ui.label(f"Peak: {channel.led.peak_wavelength_nm}nm | Model: {channel.led.model_number}").classes('text-sm text-gray-500 mb-4')
                     else:
                         ui.label("Sensor Isolation (No LED)").classes('text-sm text-gray-500 mb-4')
-
                     ui.separator().classes('mb-4 w-full')
                     
                     # --- Camera Settings Binding ---

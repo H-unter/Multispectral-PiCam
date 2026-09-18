@@ -7,13 +7,14 @@ import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Callable
 
 import cv2
 import numpy as np
 from gpiozero import LED
 from picamera2 import Picamera2
 
-from config import CHANNELS, DEFAULT_CAMERA_SETTINGS
+from config import SPECTRAL_CHANNELS, DEFAULT_CAMERA_SETTINGS
 from models import CameraSettings, SpectralChannel
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class RuntimeChannel:
     led: LED | None
 
 class CameraHardware:
+    """Encapsulates the camera and lighting hardware, providing methods for setup, capture, and export."""
     def __init__(self) -> None:
         self.camera: Picamera2 | None = None
         self.runtime_channels: dict[str, RuntimeChannel] = {}
@@ -35,8 +37,9 @@ class CameraHardware:
 
     def setup(self) -> None:
         try:
-            for channel_config in CHANNELS:
+            for channel_config in SPECTRAL_CHANNELS:
                 pin = channel_config.driver.gpio_pin
+
                 if pin is not None:
                     if pin not in _SHARED_LEDS:
                         _SHARED_LEDS[pin] = LED(pin)
@@ -109,7 +112,17 @@ class CameraHardware:
         _, buffer = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
         return base64.b64encode(buffer).decode("utf-8")
 
-    def acquire_standard_photo(self) -> list[tuple[str, np.ndarray]]:
+    @staticmethod
+    def average_rgb_channels(frame: np.ndarray) -> np.ndarray:
+        """Reduce an RGB frame to one channel by averaging each pixel's colors."""
+        if frame.ndim != 3 or frame.shape[-1] != 3:
+            raise ValueError(f"Expected an RGB frame, received shape {frame.shape}")
+        return frame.mean(axis=-1)
+
+    def acquire_standard_photo(
+        self,
+        process_frame: Callable[[np.ndarray], np.ndarray] | None = None,
+    ) -> list[tuple[str, np.ndarray]]:
         if self.camera is None:
             raise RuntimeError("Camera is not ready")
             
@@ -118,20 +131,27 @@ class CameraHardware:
         self.camera.set_controls(standard_settings.to_control_dict())
         time.sleep(1.0)
         
-        return [("standard", self.camera.capture_array("main"))]
+        frame = self.camera.capture_array("main")
+        processor = process_frame or self.average_rgb_channels
+        return [("standard", processor(frame))]
 
-    def acquire_spectral_cube(self) -> list[tuple[str, np.ndarray]]:
+    def acquire_spectral_cube(
+        self,
+        process_frame: Callable[[np.ndarray], np.ndarray] | None = None,
+    ) -> list[tuple[str, np.ndarray]]:
         if self.camera is None:
             raise RuntimeError("Camera is not ready")
 
         captured_layers = []
+        processor = process_frame or self.average_rgb_channels
         
         for band_name, rt_channel in self.runtime_channels.items():
             with self.switch_lighting(rt_channel):
                 # Pass the channel's specific CameraSettings dataclass directly
                 self.camera.set_controls(rt_channel.config.camera.to_control_dict())
                 time.sleep(0.2)
-                captured_layers.append((band_name, self.camera.capture_array("main")))
+                frame = self.camera.capture_array("main")
+                captured_layers.append((band_name, processor(frame)))
                 
         return captured_layers
 
@@ -166,8 +186,9 @@ class CameraHardware:
                 np.save(os.path.join(target_dir, f"capture_{band_name}.npy"), frame_matrix)
         elif mode == "jpg":
             for band_name, frame_matrix in layers:
-                bgr_matrix = cv2.cvtColor(frame_matrix, cv2.COLOR_RGB2BGR)
                 output_file = os.path.join(target_dir, f"capture_{band_name}.jpg")
-                cv2.imwrite(output_file, bgr_matrix)
+                if frame_matrix.ndim == 3:
+                    frame_matrix = cv2.cvtColor(frame_matrix, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(output_file, frame_matrix)
         else:
             raise ValueError(f"Unknown export mode configuration variant: {mode}")
