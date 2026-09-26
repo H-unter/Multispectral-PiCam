@@ -5,8 +5,8 @@ import os
 import sys
 from camera_hardware import CameraHardware
 
-OUTPUT_DIR = "/images"
-EXPORT_MODE = "jpg"
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+EXPORT_MODE = "hypercube" # can be "jpg", "hypercube", or "npz"
 IS_MULTISPECTRAL = True
 
 

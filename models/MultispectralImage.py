@@ -93,7 +93,9 @@ class MultispectralImage:
 		)
 		capture_metadata["data_dtype"] = str(np.result_type(*arrays))
 		capture_metadata["channels"] = channel_metadata
-		capture_metadata.setdefault("pixel_processing", "mean of RGB channels")
+		capture_metadata.setdefault(
+			"pixel_processing", "inverse-sensitivity weighted sum of RGB channels"
+		)
 
 		return cls(np.stack(arrays, axis=-1), names, capture_metadata)
 

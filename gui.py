@@ -273,6 +273,35 @@ def execute_capture_and_download(cam_id, file_name):
         finally:
             is_capturing = False
 
+def execute_hypercube_capture_and_download(cam_id, file_name):
+    global is_capturing
+    hw = hardware_instances.get(cam_id)
+    if not hw or not hw.is_ready:
+        return
+
+    is_capturing = True
+    ui.notify(f'Capturing multispectral cube from Camera {cam_id}...', type='info')
+    staged_file = os.path.join(STAGING_DIR, 'multispectral_cube.npz')
+
+    try:
+        hw.set_resolution(high_res=True)
+        image = hw.acquire_spectral_cube()
+        image.export_npz(staged_file)
+        ui.download(staged_file, f'{file_name}.npz')
+        ui.notify(f'Download initiated for {file_name}.npz!', type='positive')
+    except Exception as error:
+        logger.exception('Multispectral capture failed for camera %s', cam_id)
+        ui.notify(f'Hardware failure: {error}', type='negative')
+    finally:
+        try:
+            if hw.is_ready:
+                hw.set_resolution(high_res=False)
+        except Exception:
+            logger.exception('Could not restore preview resolution for camera %s', cam_id)
+            ui.notify('Could not restore the live preview', type='negative')
+        finally:
+            is_capturing = False
+
 # --- FRONTEND LAYOUT ---
 ui.label('Multispectral Camera Control').classes('text-2xl font-bold mb-4 w-full text-center')
 
@@ -304,6 +333,9 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                     ui.button('Capture & Download (.jpg)', icon='download',
                               on_click=lambda c=cam_id, n=file_name: execute_capture_and_download(c, n.value)
                              ).classes('w-full mt-4 bg-blue-600 text-white font-bold')
+                    ui.button('Capture Hypercube (.npz)', icon='download',
+                              on_click=lambda c=cam_id, n=file_name: execute_hypercube_capture_and_download(c, n.value)
+                             ).classes('w-full mt-2 bg-purple-600 text-white font-bold')
 
     # --- PER LED CONFIG TAB ---
     with ui.tab_panel(led_tab).classes('w-full p-0'):

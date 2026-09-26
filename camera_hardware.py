@@ -14,7 +14,12 @@ from gpiozero import LED
 from picamera2 import Picamera2
 
 from config import SPECTRAL_CHANNELS, DEFAULT_CAMERA_SETTINGS
-from models import CameraSettings, MultispectralImage, SpectralChannel
+from models import (
+    CameraSettings,
+    MultispectralImage,
+    SensorSensitivityProfile,
+    SpectralChannel,
+)
 
 logger = logging.getLogger(__name__)
 _SHARED_LEDS = {}
@@ -35,10 +40,16 @@ class RuntimeChannel:
 
 class CameraHardware:
     """Encapsulates the camera and lighting hardware, providing methods for setup, capture, and export."""
-    def __init__(self) -> None:
+    def __init__(self, sensitivity_profile: SensorSensitivityProfile | None = None) -> None:
         self.camera: Picamera2 | None = None
         self.runtime_channels: dict[str, RuntimeChannel] = {}
         self.camera_resolution: tuple[int, int] | None = None
+        profile_path = os.path.join(
+            os.path.dirname(__file__), "config", "imx571_spectral_profile.json"
+        )
+        self.sensitivity_profile = sensitivity_profile or SensorSensitivityProfile(
+            profile_path
+        )
 
     @property
     def is_ready(self) -> bool:
@@ -124,13 +135,21 @@ class CameraHardware:
         return base64.b64encode(buffer).decode("utf-8")
 
     @staticmethod
-    def average_rgb_channels(frame: np.ndarray) -> np.ndarray:
-        """Reduce an RGB or XBGR8888 frame to one channel by averaging colors."""
+    def sensitivity_weighted_rgb(
+        frame: np.ndarray,
+        sensitivity_profile: SensorSensitivityProfile,
+        wavelength_nm: int | float | None,
+    ) -> np.ndarray:
+        """Combine RGB values using inverse sensor sensitivity at a wavelength."""
         if frame.ndim != 3 or frame.shape[-1] not in (3, 4):
             raise ValueError(
                 f"Expected an RGB or four-channel frame, received shape {frame.shape}"
             )
-        return frame[..., -3:].mean(axis=-1)
+        weights = np.asarray(
+            sensitivity_profile.get_rgb_compensation_weights(wavelength_nm),
+            dtype=np.float32,
+        )
+        return np.sum(frame[..., -3:] * weights, axis=-1)
 
     def acquire_standard_photo(
         self,
@@ -155,15 +174,24 @@ class CameraHardware:
             raise RuntimeError("Camera is not ready")
 
         captured_layers = []
-        processor = process_frame or self.average_rgb_channels
-        
         for band_name, rt_channel in self.runtime_channels.items():
             with self.switch_lighting(rt_channel):
                 # Pass the channel's specific CameraSettings dataclass directly
                 self.camera.set_controls(rt_channel.config.camera.to_control_dict())
                 time.sleep(0.2)
                 frame = self.camera.capture_array("main")
-                captured_layers.append((band_name, processor(frame)))
+                if process_frame is not None:
+                    processed_frame = process_frame(frame)
+                else:
+                    wavelength_nm = (
+                        rt_channel.config.led.peak_wavelength_nm
+                        if rt_channel.config.led is not None
+                        else None
+                    )
+                    processed_frame = self.sensitivity_weighted_rgb(
+                        frame, self.sensitivity_profile, wavelength_nm
+                    )
+                captured_layers.append((band_name, processed_frame))
                 
         image_height, image_width = captured_layers[0][1].shape
         resolution = self.camera_resolution or (image_width, image_height)

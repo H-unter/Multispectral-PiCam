@@ -6,6 +6,7 @@ from .CameraSettings import CameraSettings
 from .SpectralChannel import SpectralChannel
 from .SpectralChannelCollection import SpectralChannelCollection
 from .MultispectralImage import MultispectralImage
+from .SensorProfile import SensorChannel, SensorProfile, SensorSensitivityProfile
 
 __all__ = [
     "LEDAttributes",
@@ -14,4 +15,7 @@ __all__ = [
     "SpectralChannel",
     "SpectralChannelCollection",
     "MultispectralImage",
+    "SensorChannel",
+    "SensorProfile",
+    "SensorSensitivityProfile",
 ]
