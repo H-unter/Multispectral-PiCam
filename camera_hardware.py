@@ -40,8 +40,14 @@ class RuntimeChannel:
 
 class CameraHardware:
     """Encapsulates the camera and lighting hardware, providing methods for setup, capture, and export."""
-    def __init__(self, sensitivity_profile: SensorSensitivityProfile | None = None) -> None:
+    def __init__(
+        self,
+        sensitivity_profile: SensorSensitivityProfile | None = None,
+        camera_num: int = 0,
+    ) -> None:
         self.camera: Picamera2 | None = None
+        self.camera_num = camera_num
+        self.camera_settings = CameraSettings(**vars(DEFAULT_CAMERA_SETTINGS))
         self.runtime_channels: dict[str, RuntimeChannel] = {}
         self.camera_resolution: tuple[int, int] | None = None
         profile_path = os.path.join(
@@ -61,7 +67,7 @@ class CameraHardware:
                 runtime_channel = RuntimeChannel(channel_config)
                 self.runtime_channels[channel_config.name] = runtime_channel
 
-            self.camera = Picamera2()
+            self.camera = Picamera2(camera_num=self.camera_num)
             self.set_resolution(high_res=True)
         except Exception:
             logger.exception("Camera hardware setup failed")
@@ -101,7 +107,7 @@ class CameraHardware:
         self.camera.configure(config)
         
         # Apply the default settings dataclass here
-        self.camera.set_controls(DEFAULT_CAMERA_SETTINGS.to_control_dict())
+        self.camera.set_controls(self.camera_settings.to_control_dict())
         self.camera.start()
 
     def set_focus(self, value: float) -> None:
@@ -109,10 +115,10 @@ class CameraHardware:
             return
             
         # Update the dataclass in memory so it persists
-        DEFAULT_CAMERA_SETTINGS.lens_position = value
+        self.camera_settings.lens_position = value
         
         # Apply the updated setting
-        self.camera.set_controls(DEFAULT_CAMERA_SETTINGS.to_control_dict())
+        self.camera.set_controls(self.camera_settings.to_control_dict())
 
     def set_active_channel(self, channel_name: str | None) -> None:
         """Enable one configured channel LED and switch all other LEDs off."""

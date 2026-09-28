@@ -20,8 +20,13 @@ CUBE_PATH = os.path.join(STAGING_DIR, 'multispectral_cube.npz')
 PORT = int(os.getenv('CAMERA_GUI_PORT', '8080'))
 os.makedirs(STAGING_DIR, exist_ok=True)
 
-hardware_instances = { # TODO: Extend this to support multiple cameras if needed, does i
-    0: CameraHardware(),
+hardware_instances = {
+    0: CameraHardware(camera_num=0),
+    1: CameraHardware(camera_num=1),
+}
+camera_labels = {
+    0: 'Standard camera (imx708)',
+    1: 'NoIR camera (imx708_noir)',
 }
 is_capturing = False
 viewers = {}
@@ -314,16 +319,23 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
     
     # --- GENERAL TAB (Unchanged) ---
     with ui.tab_panel(general_tab).classes('w-full p-0'):
-        with ui.row().classes('w-full flex-nowrap gap-4 items-stretch'):
+        with ui.row().classes('w-full flex-wrap gap-4 items-stretch'):
             for cam_id in hardware_instances:
-                with ui.card().classes('w-1/2 flex-grow flex flex-col justify-between'):
-                    ui.label(f'CSI Port {cam_id}').classes('text-xl font-bold mb-2')
-                    viewers[cam_id] = ui.interactive_image().classes('w-full rounded border bg-gray-100 min-h-[350px] flex-grow')
+                hardware = hardware_instances[cam_id]
+                with ui.card().classes('w-full md:w-[calc(50%-0.5rem)] min-w-0 flex-grow flex flex-col justify-between'):
+                    ui.label(camera_labels[cam_id]).classes('text-xl font-bold mb-2')
+                    viewers[cam_id] = ui.interactive_image().classes(
+                        'w-full aspect-video object-contain rounded border bg-gray-100'
+                    )
                     ui.separator().classes('my-4 w-full')
                     
                     with ui.row().classes('w-full items-center mb-2 gap-2'):
                         ui.label('Focus').classes('font-bold text-gray-700 whitespace-nowrap')
-                        focus_slider = ui.slider(min=0.0, max=10.0, step=0.1, value=0.0, 
+                        focus_slider = ui.slider(
+                            min=0.0,
+                            max=10.0,
+                            step=0.1,
+                            value=hardware.camera_settings.lens_position or 0.0,
                                                  on_change=lambda e, c=cam_id: update_focus(c, e.value)).classes('flex-grow')
                         ui.label().bind_text_from(focus_slider, 'value', backward=lambda v: f'{v:.1f}').classes('font-mono w-8 text-right')
                     
