@@ -3,6 +3,7 @@ import logging
 import base64
 import json
 import os
+import time
 from typing import Any
 
 import cv2
@@ -10,20 +11,33 @@ import numpy as np
 from nicegui import app, ui
 
 from config import SPECTRAL_CHANNELS
-from camera_hardware import CameraHardware 
+from hardware_runtime import hardware_instances, led_driver, shutdown
 from models import MultispectralImage
 
 logger = logging.getLogger(__name__)
+if os.getenv('CAMERA_GUI_PROFILE'):
+    logging.basicConfig(level=logging.INFO)
+
+
+async def profile_http_requests(request, call_next):
+    if not os.getenv('CAMERA_GUI_PROFILE'):
+        return await call_next(request)
+    started = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    logger.info('HTTP %s %s -> %s in %.1f ms', request.method, request.url.path, response.status_code, elapsed_ms)
+    return response
+
+
+if not getattr(app, '_camera_profile_middleware_registered', False):
+    app.middleware('http')(profile_http_requests)
+    setattr(app, '_camera_profile_middleware_registered', True)
 
 STAGING_DIR = os.path.abspath('./images')
 CUBE_PATH = os.path.join(STAGING_DIR, 'multispectral_cube.npz')
 PORT = int(os.getenv('CAMERA_GUI_PORT', '8080'))
 os.makedirs(STAGING_DIR, exist_ok=True)
 
-hardware_instances = {
-    0: CameraHardware(camera_num=0),
-    1: CameraHardware(camera_num=1),
-}
 camera_labels = {
     0: 'Standard camera (imx708)',
     1: 'NoIR camera (imx708_noir)',
@@ -203,7 +217,7 @@ def setup_hardware():
     ui.notify("Hardware ready! Live preview started.", type="positive")
 
 def teardown_hardware():
-    for hw in hardware_instances.values(): hw.teardown()
+    shutdown()
 
 app.on_shutdown(teardown_hardware)
 
@@ -212,9 +226,17 @@ def update_live_preview():
         for cam_id, hw in hardware_instances.items():
             if hw.is_ready:
                 try:
+                    started = time.perf_counter()
                     preview = hw.capture_preview_jpeg()
                     if preview is not None and cam_id in viewers:
                         viewers[cam_id].set_source(f'data:image/jpeg;base64,{preview}')
+                    if os.getenv('CAMERA_GUI_PROFILE'):
+                        logger.info(
+                            'Preview camera=%s bytes=%s in %.1f ms',
+                            cam_id,
+                            len(preview) if preview is not None else 0,
+                            (time.perf_counter() - started) * 1000,
+                        )
                     preview_failures.discard(cam_id)
                 except Exception:
                     if cam_id not in preview_failures:
@@ -228,6 +250,19 @@ def update_focus(cam_id, value):
             hw.set_focus(float(value))
         except Exception:
             logger.exception("Focus update failed for camera %s", cam_id)
+
+def update_channel_current(channel_name, value):
+    try:
+        hardware = next(
+            (hw for hw in hardware_instances.values() if hw.is_ready), None
+        )
+        if hardware is None:
+            SPECTRAL_CHANNELS[channel_name].driver.drive_current_ma = float(value)
+        else:
+            hardware.set_channel_current(channel_name, float(value))
+    except Exception as error:
+        logger.exception("Could not update current for channel %s", channel_name)
+        ui.notify(f"Could not update LED current: {error}", type="negative")
 
 def select_channel(channel_name):
     global selected_channel_name
@@ -379,17 +414,26 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                     # --- Driver Settings Binding ---
                     ui.label('Driver Settings').classes('font-bold text-gray-700 mb-2')
                     
-                    if channel.driver.gpio_pin is not None:
-                        ui.number('GPIO Pin', format='%.0f').bind_value(channel.driver, 'gpio_pin').classes('w-full mb-2')
-                        
-                        # Add a slider for drive current, capped by the LED's physical max limit
-                        max_ma = channel.led.max_current_ma if channel.led else 1000
-                        ui.label(f'Drive Current (Max: {max_ma}mA)').classes('text-sm')
-                        with ui.row().classes('w-full items-center gap-2 mb-2'):
-                            ui.slider(min=0, max=max_ma, step=10).bind_value(channel.driver, 'drive_current_ma').classes('flex-grow')
-                            ui.label().bind_text_from(channel.driver, 'drive_current_ma', backward=lambda v: f'{v:.0f}mA').classes('font-mono w-12 text-right')
-                    else:
-                        ui.label('No driving circuitry required.').classes('italic text-gray-500')
+                    ui.label(
+                        f'TLC5940 output channel {channel.driver.tlc5940_channel}'
+                    ).classes('text-sm text-gray-500')
+                    max_ma = led_driver.max_current_ma
+                    ui.label(f'Drive Current (Max: {max_ma:.1f}mA)').classes('text-sm')
+                    with ui.row().classes('w-full items-center gap-2 mb-2'):
+                        current_slider = ui.slider(
+                            min=0,
+                            max=max_ma,
+                            step=0.1,
+                            value=channel.driver.drive_current_ma,
+                            on_change=lambda event, name=channel.name: update_channel_current(
+                                name, event.value
+                            ),
+                        ).classes('flex-grow')
+                        ui.label().bind_text_from(
+                            current_slider,
+                            'value',
+                            backward=lambda value: f'{value:.1f}mA',
+                        ).classes('font-mono w-14 text-right')
 
     # --- MULTISPECTRAL CUBE VIEWER ---
     with ui.tab_panel(viewer_tab).classes('w-full p-0'):
@@ -439,7 +483,7 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
             load_cube()
 
 ui.timer(0.5, setup_hardware, once=True)
-ui.timer(0.2, update_live_preview)
+ui.timer(float(os.getenv('CAMERA_PREVIEW_INTERVAL', '0.5')), update_live_preview)
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(port=PORT, host='0.0.0.0', reload=False, favicon='📷')

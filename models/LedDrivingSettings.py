@@ -1,8 +1,6 @@
 from dataclasses import dataclass
-from typing import Optional
-
 @dataclass(kw_only=True)
 class LedDrivingSettings:
-    """Object representing the parameters for driving the LED hardware."""
-    gpio_pin: Optional[int]
+    """Parameters for one TLC5940 output channel."""
+    tlc5940_channel: int
     drive_current_ma: float

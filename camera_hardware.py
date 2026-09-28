@@ -4,16 +4,17 @@
 import base64
 import logging
 import os
+import threading
 import time
 from contextlib import contextmanager
 from typing import Callable
 
 import cv2
 import numpy as np
-from gpiozero import LED
 from picamera2 import Picamera2
 
 from config import SPECTRAL_CHANNELS, DEFAULT_CAMERA_SETTINGS
+from drivers.LedDriver import LedDriver
 from models import (
     CameraSettings,
     MultispectralImage,
@@ -22,21 +23,12 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
-_SHARED_LEDS = {}
 
 class RuntimeChannel:
-    """Bind a spectral-channel configuration to its GPIOZero LED hardware."""
+    """Bind a spectral-channel configuration to its TLC5940 output."""
 
     def __init__(self, config: SpectralChannel) -> None:
         self.config = config
-        pin = config.driver.gpio_pin
-
-        if pin is not None:
-            if pin not in _SHARED_LEDS:
-                _SHARED_LEDS[pin] = LED(pin)
-            self.led = _SHARED_LEDS[pin]
-        else:
-            self.led = None
 
 class CameraHardware:
     """Encapsulates the camera and lighting hardware, providing methods for setup, capture, and export."""
@@ -44,9 +36,13 @@ class CameraHardware:
         self,
         sensitivity_profile: SensorSensitivityProfile | None = None,
         camera_num: int = 0,
+        led_driver: LedDriver | None = None,
     ) -> None:
         self.camera: Picamera2 | None = None
         self.camera_num = camera_num
+        self.led_driver = led_driver or LedDriver(r2_ohms=None)
+        self._owns_led_driver = led_driver is None
+        self._setup_lock = threading.Lock()
         self.camera_settings = CameraSettings(**vars(DEFAULT_CAMERA_SETTINGS))
         self.runtime_channels: dict[str, RuntimeChannel] = {}
         self.camera_resolution: tuple[int, int] | None = None
@@ -62,17 +58,21 @@ class CameraHardware:
         return self.camera is not None
 
     def setup(self) -> None:
-        try:
-            for channel_config in SPECTRAL_CHANNELS:
-                runtime_channel = RuntimeChannel(channel_config)
-                self.runtime_channels[channel_config.name] = runtime_channel
+        with self._setup_lock:
+            if self.camera is not None:
+                return
 
-            self.camera = Picamera2(camera_num=self.camera_num)
-            self.set_resolution(high_res=True)
-        except Exception:
-            logger.exception("Camera hardware setup failed")
-            self.teardown()
-            raise
+            try:
+                for channel_config in SPECTRAL_CHANNELS:
+                    runtime_channel = RuntimeChannel(channel_config)
+                    self.runtime_channels[channel_config.name] = runtime_channel
+
+                self.camera = Picamera2(camera_num=self.camera_num)
+                self.set_resolution(high_res=False)
+            except Exception:
+                logger.exception("Camera hardware setup failed")
+                self.teardown()
+                raise
 
     def teardown(self) -> None:
         if self.camera is not None:
@@ -82,16 +82,8 @@ class CameraHardware:
                 logger.exception("Camera shutdown failed")
             self.camera = None
             
-        for channel in self.runtime_channels.values():
-            if channel.led is not None:
-                pin = channel.config.driver.gpio_pin
-                if pin in _SHARED_LEDS and _SHARED_LEDS[pin] is channel.led:
-                    try:
-                        channel.led.close()
-                    except Exception:
-                        logger.exception("LED shutdown failed for GPIO %s", pin)
-                    del _SHARED_LEDS[pin]
-                    
+        if self._owns_led_driver:
+            self.led_driver.stop()
         self.runtime_channels.clear()
 
     def set_resolution(self, high_res: bool) -> None:
@@ -125,13 +117,26 @@ class CameraHardware:
         if channel_name is not None and channel_name not in self.runtime_channels:
             raise ValueError(f"Unknown spectral channel: {channel_name}")
 
-        for name, channel in self.runtime_channels.items():
-            if channel.led is None:
-                continue
-            if name == channel_name:
-                channel.led.on()
-            else:
-                channel.led.off()
+        if channel_name is None:
+            self.led_driver.off()
+            return
+
+        channel = self.runtime_channels[channel_name].config
+        self.led_driver.solo_led(
+            channel.driver.tlc5940_channel,
+            current_ma=channel.driver.drive_current_ma,
+        )
+
+    def set_channel_current(self, channel_name: str, current_ma: float) -> None:
+        if channel_name not in self.runtime_channels:
+            raise ValueError(f"Unknown spectral channel: {channel_name}")
+
+        channel = self.runtime_channels[channel_name].config
+        channel.driver.drive_current_ma = float(current_ma)
+        self.led_driver.set_current_ma(
+            channel.driver.tlc5940_channel,
+            current_ma,
+        )
 
     def capture_preview_jpeg(self, quality: int = 40) -> str | None:
         if self.camera is None:
@@ -207,19 +212,17 @@ class CameraHardware:
             metadata={"camera": {"resolution": list(resolution)}},
         )
 
-    @staticmethod
     @contextmanager
-    def switch_lighting(rt_channel: RuntimeChannel):
-        if rt_channel.led is not None:
-            rt_channel.led.on()
-        else:
-            print(f" Isolating sensor environment ({rt_channel.config.name})...")
-            
+    def switch_lighting(self, rt_channel: RuntimeChannel):
+        channel = rt_channel.config
+        self.led_driver.solo_led(
+            channel.driver.tlc5940_channel,
+            current_ma=channel.driver.drive_current_ma,
+        )
         try:
             yield
         finally:
-            if rt_channel.led is not None:
-                rt_channel.led.off()
+            self.led_driver.off(channel.driver.tlc5940_channel)
 
     @staticmethod
     def export_data(
