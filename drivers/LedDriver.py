@@ -58,6 +58,8 @@ class LedDriver:
         self._running = False
         self._thread = None
         self._lock = threading.Lock()
+        self._stop_lock = threading.Lock()
+        self._closed = False
 
         # 3. Zero out hardware registers before enabling outputs
         self.update_dot_correction()
@@ -219,12 +221,18 @@ class LedDriver:
 
     def stop(self):
         """Stop the background thread, blank all outputs, and release GPIO pins."""
-        self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
-        self.blank.on()
-        for pin in (self.sin, self.sclk, self.blank, self.xlat, self.gsclk, self.vprg):
-            pin.close()
+        with self._stop_lock:
+            if self._closed:
+                return
+
+            self._running = False
+            if self._thread is not None:
+                self._thread.join(timeout=1.0)
+            with self._lock:
+                self.blank.on()
+                for pin in (self.sin, self.sclk, self.blank, self.xlat, self.gsclk, self.vprg):
+                    pin.close()
+                self._closed = True
 
     @staticmethod
     def _validate_channel(channel):

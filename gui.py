@@ -29,7 +29,7 @@ async def profile_http_requests(request, call_next):
     return response
 
 
-if not getattr(app, '_camera_profile_middleware_registered', False):
+if os.getenv('CAMERA_GUI_PROFILE') and not getattr(app, '_camera_profile_middleware_registered', False):
     app.middleware('http')(profile_http_requests)
     setattr(app, '_camera_profile_middleware_registered', True)
 
@@ -47,6 +47,7 @@ viewers = {}
 preview_failures = set()
 selected_channel_name = None
 hardware_setup_attempted = False
+hardware_setup_error = None
 loaded_cube: MultispectralImage | None = None
 cube_path_input: Any = None
 band_select: Any = None
@@ -58,6 +59,7 @@ metadata_display: Any = None
 band_title: Any = None
 false_color_positions = [0, 1, 2]
 marker_sliders = []
+focus_sliders = {}
 
 
 def _image_data_uri(image: np.ndarray, color: bool = False) -> str:
@@ -191,9 +193,9 @@ def load_cube() -> None:
         logger.exception('Could not load multispectral cube')
         ui.notify(f'Could not load cube: {error}', type='negative')
 
-# --- HARDWARE LIFECYCLE (Unchanged from previous) ---
-def setup_hardware():
-    global hardware_setup_attempted
+# --- HARDWARE LIFECYCLE ---
+def initialize_hardware() -> None:
+    global hardware_setup_attempted, hardware_setup_error
     if hardware_setup_attempted:
         return
     hardware_setup_attempted = True
@@ -201,18 +203,28 @@ def setup_hardware():
     try:
         for hw in hardware_instances.values():
             hw.setup()
-            if selected_channel_name is not None:
-                hw.set_active_channel(selected_channel_name)
     except Exception as error:
+        hardware_setup_error = error
         logger.exception("Hardware initialization failed")
         for hw in hardware_instances.values():
             hw.teardown()
+
+
+def setup_hardware():
+    initialize_hardware()
+    if hardware_setup_error is not None:
         ui.notify(
-            f"Camera unavailable. Stop other camera programs and restart the GUI: {error}",
+            f"Camera unavailable. Stop other camera programs and restart the GUI: {hardware_setup_error}",
             type="negative",
             timeout=10000,
         )
         return
+
+    for cam_id, hw in hardware_instances.items():
+        focus_slider = focus_sliders[cam_id]
+        focus_slider.enable()
+        if selected_channel_name is not None:
+            hw.set_active_channel(selected_channel_name)
 
     ui.notify("Hardware ready! Live preview started.", type="positive")
 
@@ -220,6 +232,7 @@ def teardown_hardware():
     shutdown()
 
 app.on_shutdown(teardown_hardware)
+initialize_hardware()
 
 def update_live_preview():
     if not is_capturing:
@@ -368,11 +381,16 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                         ui.label('Focus').classes('font-bold text-gray-700 whitespace-nowrap')
                         focus_slider = ui.slider(
                             min=0.0,
-                            max=10.0,
+                            max=hardware.focus_max,
                             step=0.1,
                             value=hardware.camera_settings.lens_position or 0.0,
                                                  on_change=lambda e, c=cam_id: update_focus(c, e.value)).classes('flex-grow')
-                        ui.label().bind_text_from(focus_slider, 'value', backward=lambda v: f'{v:.1f}').classes('font-mono w-8 text-right')
+                        focus_sliders[cam_id] = focus_slider
+                        ui.label().bind_text_from(
+                            focus_slider,
+                            'value',
+                            backward=lambda v: f'{v:.1f}' if v is not None else '-',
+                        ).classes('font-mono w-8 text-right')
                     
                     ui.separator().classes('my-2 w-full')
                     ui.label('Download Settings').classes('font-bold text-gray-700 mt-2')
@@ -478,9 +496,6 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                                 on_change=lambda event, i=index: move_false_color_marker(i, event),
                             ).classes('flex-grow')
                         )
-
-        if os.path.exists(CUBE_PATH):
-            load_cube()
 
 ui.timer(0.5, setup_hardware, once=True)
 ui.timer(float(os.getenv('CAMERA_PREVIEW_INTERVAL', '0.5')), update_live_preview)

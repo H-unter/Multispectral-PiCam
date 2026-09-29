@@ -13,7 +13,10 @@ import cv2
 import numpy as np
 from picamera2 import Picamera2
 
-from config import SPECTRAL_CHANNELS, DEFAULT_CAMERA_SETTINGS
+from config import (
+    DEFAULT_CAMERA_SETTINGS,
+    SPECTRAL_CHANNELS,
+)
 from drivers.LedDriver import LedDriver
 from models import (
     CameraSettings,
@@ -40,6 +43,7 @@ class CameraHardware:
     ) -> None:
         self.camera: Picamera2 | None = None
         self.camera_num = camera_num
+        self.focus_max = 0.0
         self.led_driver = led_driver or LedDriver(r2_ohms=None)
         self._owns_led_driver = led_driver is None
         self._setup_lock = threading.Lock()
@@ -68,6 +72,10 @@ class CameraHardware:
                     self.runtime_channels[channel_config.name] = runtime_channel
 
                 self.camera = Picamera2(camera_num=self.camera_num)
+                _focus_min, self.focus_max, _focus_default = self.camera.camera_controls[
+                    "LensPosition"
+                ]
+                self.focus_max = float(self.focus_max)
                 self.set_resolution(high_res=False)
             except Exception:
                 logger.exception("Camera hardware setup failed")
@@ -81,9 +89,14 @@ class CameraHardware:
             except Exception:
                 logger.exception("Camera shutdown failed")
             self.camera = None
-            
-        if self._owns_led_driver:
-            self.led_driver.stop()
+
+        try:
+            self.led_driver.off()
+        except Exception:
+            logger.exception("LED shutdown failed")
+        finally:
+            if self._owns_led_driver:
+                self.led_driver.stop()
         self.runtime_channels.clear()
 
     def set_resolution(self, high_res: bool) -> None:
@@ -105,9 +118,12 @@ class CameraHardware:
     def set_focus(self, value: float) -> None:
         if self.camera is None:
             return
-            
+
         # Update the dataclass in memory so it persists
-        self.camera_settings.lens_position = value
+        self.camera_settings.lens_position = max(
+            0.0,
+            min(self.focus_max, float(value)),
+        )
         
         # Apply the updated setting
         self.camera.set_controls(self.camera_settings.to_control_dict())
