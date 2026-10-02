@@ -37,12 +37,12 @@ class CameraHardware:
     """Encapsulates the camera and lighting hardware, providing methods for setup, capture, and export."""
     def __init__(
         self,
+        csi_port: int,
         sensitivity_profile: SensorSensitivityProfile | None = None,
-        camera_num: int = 0,
         led_driver: LedDriver | None = None,
     ) -> None:
         self.camera: Picamera2 | None = None
-        self.camera_num = camera_num
+        self.csi_port = csi_port
         self.focus_max = 0.0
         self.led_driver = led_driver or LedDriver(r2_ohms=None)
         self._owns_led_driver = led_driver is None
@@ -71,7 +71,18 @@ class CameraHardware:
                     runtime_channel = RuntimeChannel(channel_config)
                     self.runtime_channels[channel_config.name] = runtime_channel
 
-                self.camera = Picamera2(camera_num=self.camera_num)
+                camera_info = Picamera2.global_camera_info()
+                matching_cameras = [
+                    info for info in camera_info
+                    if info.get("Location") == self.csi_port
+                ]
+                if len(matching_cameras) != 1:
+                    raise RuntimeError(
+                        f"Expected one camera at CSI location {self.csi_port}, "
+                        f"found {len(matching_cameras)}"
+                    )
+
+                self.camera = Picamera2(camera_num=matching_cameras[0]["Num"])
                 _focus_min, self.focus_max, _focus_default = self.camera.camera_controls[
                     "LensPosition"
                 ]

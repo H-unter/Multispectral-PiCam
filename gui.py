@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from nicegui import app, ui
 
-from config import SPECTRAL_CHANNELS
+from config import CAMERA_CONFIG, SPECTRAL_CHANNELS
 from hardware_runtime import hardware_instances, led_driver, shutdown
 from models import MultispectralImage
 
@@ -39,8 +39,8 @@ PORT = int(os.getenv('CAMERA_GUI_PORT', '8080'))
 os.makedirs(STAGING_DIR, exist_ok=True)
 
 camera_labels = {
-    0: 'Standard camera (imx708)',
-    1: 'NoIR camera (imx708_noir)',
+    definition.camera_id: definition.label
+    for definition in CAMERA_CONFIG
 }
 is_capturing = False
 viewers = {}

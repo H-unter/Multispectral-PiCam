@@ -5,14 +5,18 @@ import logging
 import signal
 
 from camera_hardware import CameraHardware
+from config import CAMERA_CONFIG
 from drivers.LedDriver import LedDriver
 
 logger = logging.getLogger(__name__)
 
 led_driver = LedDriver(r2_ohms=None)
 hardware_instances = {
-    0: CameraHardware(camera_num=0, led_driver=led_driver),
-    1: CameraHardware(camera_num=1, led_driver=led_driver),
+    definition.camera_id: CameraHardware(
+        csi_port=definition.csi_port,
+        led_driver=led_driver,
+    )
+    for definition in CAMERA_CONFIG
 }
 _shutdown_complete = False
 
