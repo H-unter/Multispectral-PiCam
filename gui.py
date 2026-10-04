@@ -60,6 +60,9 @@ band_title: Any = None
 false_color_positions = [0, 1, 2]
 marker_sliders = []
 focus_sliders = {}
+channel_selector: Any = None
+channel_cards = {}
+channel_buttons = {}
 
 
 def _image_data_uri(image: np.ndarray, color: bool = False) -> str:
@@ -277,9 +280,29 @@ def update_channel_current(channel_name, value):
         logger.exception("Could not update current for channel %s", channel_name)
         ui.notify(f"Could not update LED current: {error}", type="negative")
 
+
+def update_channel_card_styles():
+    for name, card in channel_cards.items():
+        if name == selected_channel_name:
+            card.classes(add='bg-blue-100 ring-2 ring-blue-500')
+        else:
+            card.classes(remove='bg-blue-100 ring-2 ring-blue-500')
+        if name in channel_buttons:
+            channel_buttons[name].set_text('Off' if name == selected_channel_name else 'On')
+
+
+def toggle_channel(channel_name):
+    select_channel(None if selected_channel_name == channel_name else channel_name)
+
+
 def select_channel(channel_name):
     global selected_channel_name
+    if channel_name == 'Off':
+        channel_name = None
     selected_channel_name = channel_name
+    if channel_selector is not None:
+        channel_selector.value = channel_name
+    update_channel_card_styles()
 
     try:
         ready_hardware = [hw for hw in hardware_instances.values() if hw.is_ready]
@@ -367,10 +390,19 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
     
     # --- GENERAL TAB (Unchanged) ---
     with ui.tab_panel(general_tab).classes('w-full p-0'):
-        with ui.row().classes('w-full flex-wrap gap-4 items-stretch'):
+        camera_count = len(hardware_instances)
+        camera_row_alignment = ' justify-center' if camera_count == 1 else ''
+        with ui.row().classes(f'w-full flex-wrap gap-4 items-stretch{camera_row_alignment}'):
             for cam_id in hardware_instances:
                 hardware = hardware_instances[cam_id]
-                with ui.card().classes('w-full md:w-[calc(50%-0.5rem)] min-w-0 flex-grow flex flex-col justify-between'):
+                camera_card_width = (
+                    'w-full max-w-3xl'
+                    if camera_count == 1
+                    else 'w-full md:w-[calc(50%-0.5rem)] flex-grow'
+                )
+                with ui.card().classes(
+                    f'{camera_card_width} min-w-0 flex flex-col justify-between'
+                ):
                     ui.label(camera_labels[cam_id]).classes('text-xl font-bold mb-2')
                     viewers[cam_id] = ui.interactive_image().classes(
                         'w-full aspect-video object-contain rounded border bg-gray-100'
@@ -405,39 +437,42 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
     # --- PER LED CONFIG TAB ---
     with ui.tab_panel(led_tab).classes('w-full p-0'):
         ui.label('Manual LED Selection').classes('text-xl font-bold mb-2')
-        ui.radio(
-            {channel.name: channel.name for channel in SPECTRAL_CHANNELS},
+        channel_selector = ui.radio(
+            {'Off': None, **{channel.name: channel.name for channel in SPECTRAL_CHANNELS}},
             value=None,
-            on_change=lambda event: select_channel(event.value),
+            on_change=lambda event: select_channel(
+                None if event.value == 'Off' else event.value
+            ),
         ).props('inline')
         ui.label('Select one channel at a time.').classes('text-sm text-gray-500 mb-4')
 
-        with ui.row().classes('w-full gap-4 flex-wrap items-stretch'):            
+        with ui.row().classes('w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 items-stretch'):
             for channel in SPECTRAL_CHANNELS:
-                with ui.card().classes('flex-grow min-w-[300px] w-1/3'):
-                    ui.label(channel.name).classes('text-xl font-bold text-blue-600 mb-2')
+                with ui.card().classes('min-w-0 p-3 flex flex-col') as channel_card:
+                    channel_cards[channel.name] = channel_card
+                    ui.label(channel.name).classes('text-lg font-bold text-blue-600 mb-1')
                     if channel.led:
-                        ui.label(f"Peak: {channel.led.peak_wavelength_nm}nm | Model: {channel.led.model_number}").classes('text-sm text-gray-500 mb-4')
+                        ui.label(f"Peak: {channel.led.peak_wavelength_nm}nm | Model: {channel.led.model_number}").classes('text-xs text-gray-500 mb-2')
                     else:
-                        ui.label("Sensor Isolation (No LED)").classes('text-sm text-gray-500 mb-4')
-                    ui.separator().classes('mb-4 w-full')
+                        ui.label("Sensor Isolation (No LED)").classes('text-xs text-gray-500 mb-2')
+                    ui.separator().classes('mb-2 w-full')
                     
                     # --- Camera Settings Binding ---
-                    ui.label('Camera Settings').classes('font-bold text-gray-700 mb-2')
+                    ui.label('Camera Settings').classes('text-sm font-bold text-gray-700 mb-1')
                     
                     # Note the use of bind_value! Changing this input instantly changes channel.camera.exposure_time_us
-                    ui.number('Exposure Time (us)', format='%.0f').bind_value(channel.camera, 'exposure_time_us').classes('w-full mb-2')
-                    ui.number('Analogue Gain', format='%.1f').bind_value(channel.camera, 'analogue_gain').classes('w-full mb-4')
+                    ui.number('Exposure Time (us)', format='%.0f').bind_value(channel.camera, 'exposure_time_us').classes('w-full mb-1')
+                    ui.number('Analogue Gain', format='%.1f').bind_value(channel.camera, 'analogue_gain').classes('w-full mb-2')
 
                     # --- Driver Settings Binding ---
-                    ui.label('Driver Settings').classes('font-bold text-gray-700 mb-2')
+                    ui.label('Driver Settings').classes('text-sm font-bold text-gray-700 mb-1')
                     
                     ui.label(
                         f'TLC5940 output channel {channel.driver.tlc5940_channel}'
-                    ).classes('text-sm text-gray-500')
+                    ).classes('text-xs text-gray-500')
                     max_ma = led_driver.max_current_ma
-                    ui.label(f'Drive Current (Max: {max_ma:.1f}mA)').classes('text-sm')
-                    with ui.row().classes('w-full items-center gap-2 mb-2'):
+                    ui.label(f'Drive Current (Max: {max_ma:.1f}mA)').classes('text-xs')
+                    with ui.row().classes('w-full items-center gap-1 mb-2'):
                         current_slider = ui.slider(
                             min=0,
                             max=max_ma,
@@ -451,7 +486,13 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                             current_slider,
                             'value',
                             backward=lambda value: f'{value:.1f}mA',
-                        ).classes('font-mono w-14 text-right')
+                        ).classes('font-mono w-12 text-right text-xs')
+                    with ui.button(
+                        'On',
+                        icon='lightbulb',
+                        on_click=lambda name=channel.name: toggle_channel(name),
+                    ).props('dense').classes('w-full bg-blue-600 text-white') as channel_button:
+                        channel_buttons[channel.name] = channel_button
 
     # --- MULTISPECTRAL CUBE VIEWER ---
     with ui.tab_panel(viewer_tab).classes('w-full p-0'):
