@@ -269,16 +269,23 @@ def update_focus(cam_id, value):
 
 def update_channel_current(channel_name, value):
     try:
+        channel = SPECTRAL_CHANNELS[channel_name]
+        current_ma = min(float(value), channel_max_current(channel))
         hardware = next(
             (hw for hw in hardware_instances.values() if hw.is_ready), None
         )
         if hardware is None:
-            SPECTRAL_CHANNELS[channel_name].driver.drive_current_ma = float(value)
+            channel.driver.drive_current_ma = current_ma
         else:
-            hardware.set_channel_current(channel_name, float(value))
+            hardware.set_channel_current(channel_name, current_ma)
     except Exception as error:
         logger.exception("Could not update current for channel %s", channel_name)
         ui.notify(f"Could not update LED current: {error}", type="negative")
+
+
+def channel_max_current(channel):
+    led_limit = channel.led.max_current_ma if channel.led else led_driver.max_current_ma
+    return min(float(led_limit), float(led_driver.max_current_ma))
 
 
 def update_channel_card_styles():
@@ -470,14 +477,16 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                     ui.label(
                         f'TLC5940 output channel {channel.driver.tlc5940_channel}'
                     ).classes('text-xs text-gray-500')
-                    max_ma = led_driver.max_current_ma
+                    max_ma = channel_max_current(channel)
+                    channel_current_ma = min(channel.driver.drive_current_ma, max_ma)
+                    channel.driver.drive_current_ma = channel_current_ma
                     ui.label(f'Drive Current (Max: {max_ma:.1f}mA)').classes('text-xs')
                     with ui.row().classes('w-full items-center gap-1 mb-2'):
                         current_slider = ui.slider(
                             min=0,
                             max=max_ma,
                             step=0.1,
-                            value=channel.driver.drive_current_ma,
+                            value=channel_current_ma,
                             on_change=lambda event, name=channel.name: update_channel_current(
                                 name, event.value
                             ),

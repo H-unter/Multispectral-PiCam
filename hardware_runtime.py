@@ -6,11 +6,11 @@ import signal
 
 from camera_hardware import CameraHardware
 from config import CAMERA_CONFIG
-from drivers.LedDriver import LedDriver
+from drivers.LedDriver import DEFAULT_R2_OHMS, LedDriver
 
 logger = logging.getLogger(__name__)
 
-led_driver = LedDriver(r2_ohms=None)
+led_driver = LedDriver(r2_ohms=DEFAULT_R2_OHMS)
 hardware_instances = {
     definition.camera_id: CameraHardware(
         csi_port=definition.csi_port,

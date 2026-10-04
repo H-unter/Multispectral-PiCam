@@ -2,6 +2,8 @@ import time
 import threading
 from gpiozero import DigitalOutputDevice
 
+DEFAULT_R2_OHMS = 390.0
+
 
 class LedDriver:
     """
@@ -16,7 +18,7 @@ class LedDriver:
 
     def __init__(
         self,
-        r2_ohms=None,      # Parallel resistor soldered into R2 (None = stock 17.8 mA board)
+        r2_ohms=DEFAULT_R2_OHMS,
         sin_pin=10,        # Physical Pin 19
         sclk_pin=11,       # Physical Pin 23
         blank_pin=25,      # Physical Pin 22
@@ -241,10 +243,8 @@ class LedDriver:
 
 
 def test_slot0():
-    """Main test script for Slot 0 using the stock board (r2_ohms=None)."""
-    # Leave r2_ohms=None for stock board (~17.8 mA max).
-    # Later, pass r2_ohms=390 when you solder a 390-ohm resistor into R2 (~118 mA max).
-    with LedDriver(r2_ohms=None) as leds:
+    """Main test script for Slot 0 using the 390-ohm R2 configuration."""
+    with LedDriver(r2_ohms=DEFAULT_R2_OHMS) as leds:
         print(f"Initialized LedDriver | R_IREF = {leds.r_iref_ohms:.1f} ohms | I_max = {leds.max_current_ma:.2f} mA")
         print("Testing Slot 0 current scaling & brightness... Press Ctrl+C to stop.\n")
 

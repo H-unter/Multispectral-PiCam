@@ -17,7 +17,7 @@ from config import (
     DEFAULT_CAMERA_SETTINGS,
     SPECTRAL_CHANNELS,
 )
-from drivers.LedDriver import LedDriver
+from drivers.LedDriver import DEFAULT_R2_OHMS, LedDriver
 from models import (
     CameraSettings,
     MultispectralImage,
@@ -44,7 +44,7 @@ class CameraHardware:
         self.camera: Picamera2 | None = None
         self.csi_port = csi_port
         self.focus_max = 0.0
-        self.led_driver = led_driver or LedDriver(r2_ohms=None)
+        self.led_driver = led_driver or LedDriver(r2_ohms=DEFAULT_R2_OHMS)
         self._owns_led_driver = led_driver is None
         self._setup_lock = threading.Lock()
         self.camera_settings = CameraSettings(**vars(DEFAULT_CAMERA_SETTINGS))
@@ -151,7 +151,7 @@ class CameraHardware:
         channel = self.runtime_channels[channel_name].config
         self.led_driver.solo_led(
             channel.driver.tlc5940_channel,
-            current_ma=channel.driver.drive_current_ma,
+            current_ma=self._channel_current_ma(channel),
         )
 
     def set_channel_current(self, channel_name: str, current_ma: float) -> None:
@@ -159,11 +159,24 @@ class CameraHardware:
             raise ValueError(f"Unknown spectral channel: {channel_name}")
 
         channel = self.runtime_channels[channel_name].config
-        channel.driver.drive_current_ma = float(current_ma)
+        channel.driver.drive_current_ma = self._channel_current_ma(channel, current_ma)
         self.led_driver.set_current_ma(
             channel.driver.tlc5940_channel,
-            current_ma,
+            channel.driver.drive_current_ma,
         )
+
+    def _channel_current_ma(
+        self,
+        channel: SpectralChannel,
+        current_ma: float | None = None,
+    ) -> float:
+        requested_ma = (
+            channel.driver.drive_current_ma
+            if current_ma is None
+            else float(current_ma)
+        )
+        led_limit = channel.led.max_current_ma if channel.led else self.led_driver.max_current_ma
+        return min(requested_ma, float(led_limit), self.led_driver.max_current_ma)
 
     def capture_preview_jpeg(self, quality: int = 40) -> str | None:
         if self.camera is None:
@@ -244,7 +257,7 @@ class CameraHardware:
         channel = rt_channel.config
         self.led_driver.solo_led(
             channel.driver.tlc5940_channel,
-            current_ma=channel.driver.drive_current_ma,
+            current_ma=self._channel_current_ma(channel),
         )
         try:
             yield

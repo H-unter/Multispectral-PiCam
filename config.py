@@ -36,7 +36,7 @@ SPECTRAL_CHANNELS = SpectralChannelCollection([
     SpectralChannel(
         name=f"red_led_{tlc5940_channel}",
         led=LED_name_to_LEDAttributes['red_led'],
-        driver=LedDrivingSettings(tlc5940_channel=tlc5940_channel, drive_current_ma=17.8),
+        driver=LedDrivingSettings(tlc5940_channel=tlc5940_channel, drive_current_ma=20),
         camera=CameraSettings(exposure_time_us=10000, analogue_gain=1.0)
     )
     for tlc5940_channel in range(16)
