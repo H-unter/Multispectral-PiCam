@@ -4,11 +4,12 @@ import base64
 import json
 import os
 import time
+from uuid import uuid4
 from typing import Any
 
 import cv2
 import numpy as np
-from nicegui import app, ui
+from nicegui import app, run, ui
 
 from config import CAMERA_CONFIG, SPECTRAL_CHANNELS
 from hardware_runtime import hardware_instances, led_driver, shutdown
@@ -54,6 +55,8 @@ band_select: Any = None
 false_color_selects = []
 band_image: Any = None
 false_color_image: Any = None
+band_viewer_frame: Any = None
+false_color_viewer_frame: Any = None
 histogram_chart: Any = None
 metadata_display: Any = None
 band_title: Any = None
@@ -63,6 +66,91 @@ focus_sliders = {}
 channel_selector: Any = None
 channel_cards = {}
 channel_buttons = {}
+capture_statuses = {}
+SENSOR_WIDTH, SENSOR_HEIGHT = 4608, 2592
+PREVIEW_WIDTH, PREVIEW_HEIGHT = 800, 450
+preview_crop_centers = {
+    cam_id: [PREVIEW_WIDTH / 2, PREVIEW_HEIGHT / 2]
+    for cam_id in hardware_instances
+}
+preview_dragging = set()
+preview_crop_overlays = {}
+crop_size_inputs = {}
+
+def _preview_event_position(event) -> tuple[float, float] | None:
+    x = getattr(event, 'image_x', None)
+    y = getattr(event, 'image_y', None)
+    if x is None or y is None:
+        return None
+    return (
+        max(0.0, min(PREVIEW_WIDTH, float(x))),
+        max(0.0, min(PREVIEW_HEIGHT, float(y))),
+    )
+
+
+def _crop_preview_size(crop_size: int) -> float:
+    return crop_size * PREVIEW_WIDTH / SENSOR_WIDTH
+
+
+def _update_crop_overlay(cam_id: str) -> None:
+    overlay = preview_crop_overlays.get(cam_id)
+    if overlay is None:
+        return
+    crop_size = int(crop_size_inputs[cam_id].value or 700)
+    crop_size = max(32, min(crop_size, SENSOR_HEIGHT, SENSOR_WIDTH))
+    preview_size = _crop_preview_size(crop_size)
+    center_x, center_y = preview_crop_centers[cam_id]
+    left = max(0.0, min(PREVIEW_WIDTH - preview_size, center_x - preview_size / 2))
+    top = max(0.0, min(PREVIEW_HEIGHT - preview_size, center_y - preview_size / 2))
+    overlay.style(
+        f'left: {left:.1f}px; top: {top:.1f}px; '
+        f'width: {preview_size:.1f}px; height: {preview_size:.1f}px;'
+    )
+
+
+def _update_crop_center(cam_id: str, event) -> None:
+    position = _preview_event_position(event)
+    if position is None or is_capturing:
+        return
+    preview_crop_centers[cam_id][:] = position
+    _update_crop_overlay(cam_id)
+
+
+def _start_crop_drag(cam_id: str, event) -> None:
+    if not is_capturing:
+        preview_dragging.add(cam_id)
+        _update_crop_center(cam_id, event)
+
+
+def _drag_crop(cam_id: str, event) -> None:
+    if cam_id in preview_dragging:
+        _update_crop_center(cam_id, event)
+
+
+def _stop_crop_drag(cam_id: str, _event) -> None:
+    preview_dragging.discard(cam_id)
+
+
+def _handle_preview_mouse(cam_id: str, event) -> None:
+    event_name = getattr(event, 'type', '')
+    if event_name == 'mousedown':
+        _start_crop_drag(cam_id, event)
+    elif event_name == 'mousemove':
+        _drag_crop(cam_id, event)
+    else:
+        _stop_crop_drag(cam_id, event)
+
+
+def _preview_crop_for_capture(cam_id: str) -> tuple[int, int, int, int]:
+    crop_size = int(crop_size_inputs[cam_id].value or 700)
+    crop_size = max(32, min(crop_size, SENSOR_HEIGHT, SENSOR_WIDTH))
+    center_x, center_y = preview_crop_centers[cam_id]
+
+    left = center_x * SENSOR_WIDTH / PREVIEW_WIDTH - crop_size / 2
+    top = center_y * SENSOR_HEIGHT / PREVIEW_HEIGHT - crop_size / 2
+    left = max(0, min(int(round(left)), SENSOR_WIDTH - crop_size))
+    top = max(0, min(int(round(top)), SENSOR_HEIGHT - crop_size))
+    return left, top, crop_size, crop_size
 
 
 def _image_data_uri(image: np.ndarray, color: bool = False) -> str:
@@ -268,6 +356,9 @@ def update_focus(cam_id, value):
             logger.exception("Focus update failed for camera %s", cam_id)
 
 def update_channel_current(channel_name, value):
+    if is_capturing:
+        ui.notify("LED settings cannot change during a capture.", type="warning")
+        return
     try:
         channel = SPECTRAL_CHANNELS[channel_name]
         current_ma = min(float(value), channel_max_current(channel))
@@ -304,6 +395,9 @@ def toggle_channel(channel_name):
 
 def select_channel(channel_name):
     global selected_channel_name
+    if is_capturing:
+        ui.notify("LED selection cannot change during a capture.", type="warning")
+        return
     if channel_name == 'Off':
         channel_name = None
     selected_channel_name = channel_name
@@ -325,65 +419,90 @@ def select_channel(channel_name):
         logger.exception("Could not select spectral channel %s", channel_name)
         ui.notify(f"Could not select channel: {error}", type="negative")
 
-def execute_capture_and_download(cam_id, file_name):
+def _capture_standard_image(hw, staged_dir, scaler_crop):
+    hw.set_resolution(high_res=True, scaler_crop=scaler_crop)
+    try:
+        layers = hw.acquire_standard_photo()
+        hw.export_data(layers, staged_dir, "jpg")
+        return layers
+    finally:
+        if hw.is_ready:
+            hw.set_resolution(high_res=False)
+
+
+def _capture_hypercube(hw, staged_file, scaler_crop):
+    hw.set_resolution(high_res=True, scaler_crop=scaler_crop)
+    try:
+        image = hw.acquire_spectral_cube()
+        image.export_npz(staged_file)
+    finally:
+        if hw.is_ready:
+            hw.set_resolution(high_res=False)
+
+
+async def execute_capture_and_download(cam_id, file_name):
     global is_capturing
     hw = hardware_instances.get(cam_id)
     if not hw or not hw.is_ready: return
+    if is_capturing:
+        ui.notify("Another capture is already in progress.", type="warning")
+        return
         
     is_capturing = True 
+    capture_statuses[cam_id].set_text('Capturing standard image...')
     ui.notify(f"Capturing Camera {cam_id}...", type="info")
     
     try:
-        hw.set_resolution(high_res=True)
-        layers = hw.acquire_standard_photo()
-        hw.export_data(layers, STAGING_DIR, "jpg")
+        crop = _preview_crop_for_capture(cam_id)
+        layers = await run.io_bound(_capture_standard_image, hw, STAGING_DIR, crop)
         
         if layers:
             band_name = layers[0][0] 
             staged_file = os.path.join(STAGING_DIR, f"capture_{band_name}.jpg")
             if os.path.exists(staged_file):
                 ui.download(staged_file, f"{file_name}.jpg")
+                capture_statuses[cam_id].set_text('Standard image ready for download.')
                 ui.notify(f"Download initiated for {file_name}.jpg!", type="positive")
     except Exception as e:
+        capture_statuses[cam_id].set_text('Standard image capture failed.')
+        logger.exception("Standard capture failed for camera %s", cam_id)
         ui.notify(f"Hardware failure: {e}", type="negative")
     finally:
-        try:
-            if hw.is_ready:
-                hw.set_resolution(high_res=False)
-        except Exception:
-            logger.exception("Could not restore preview resolution for camera %s", cam_id)
-            ui.notify("Could not restore the live preview", type="negative")
-        finally:
-            is_capturing = False
+        is_capturing = False
 
-def execute_hypercube_capture_and_download(cam_id, file_name):
+async def execute_hypercube_capture_and_download(cam_id, file_name):
     global is_capturing
     hw = hardware_instances.get(cam_id)
     if not hw or not hw.is_ready:
         return
+    if is_capturing:
+        ui.notify("Another capture is already in progress.", type="warning")
+        return
 
     is_capturing = True
+    capture_statuses[cam_id].set_text(
+        'Capturing multispectral cube with the current Per LED Config values...'
+    )
     ui.notify(f'Capturing multispectral cube from Camera {cam_id}...', type='info')
-    staged_file = os.path.join(STAGING_DIR, 'multispectral_cube.npz')
+    staged_file = os.path.join(
+        STAGING_DIR,
+        f'.multispectral_cube_{uuid4().hex}.npz',
+    )
 
     try:
-        hw.set_resolution(high_res=True)
-        image = hw.acquire_spectral_cube()
-        image.export_npz(staged_file)
+        crop = _preview_crop_for_capture(cam_id)
+        await run.io_bound(_capture_hypercube, hw, staged_file, crop)
+        if cube_path_input is not None:
+            cube_path_input.value = staged_file
         ui.download(staged_file, f'{file_name}.npz')
+        capture_statuses[cam_id].set_text('Multispectral cube ready for download.')
         ui.notify(f'Download initiated for {file_name}.npz!', type='positive')
     except Exception as error:
         logger.exception('Multispectral capture failed for camera %s', cam_id)
+        capture_statuses[cam_id].set_text('Multispectral capture failed.')
         ui.notify(f'Hardware failure: {error}', type='negative')
     finally:
-        try:
-            if hw.is_ready:
-                hw.set_resolution(high_res=False)
-        except Exception:
-            logger.exception('Could not restore preview resolution for camera %s', cam_id)
-            ui.notify('Could not restore the live preview', type='negative')
-        finally:
-            is_capturing = False
+        is_capturing = False
 
 # --- FRONTEND LAYOUT ---
 ui.label('Multispectral Camera Control').classes('text-2xl font-bold mb-4 w-full text-center')
@@ -411,9 +530,17 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                     f'{camera_card_width} min-w-0 flex flex-col justify-between'
                 ):
                     ui.label(camera_labels[cam_id]).classes('text-xl font-bold mb-2')
-                    viewers[cam_id] = ui.interactive_image().classes(
-                        'w-full aspect-video object-contain rounded border bg-gray-100'
-                    )
+                    with ui.element('div').classes(
+                        'relative w-full aspect-video overflow-hidden rounded border bg-gray-100'
+                    ):
+                        viewers[cam_id] = ui.interactive_image(
+                            on_mouse=lambda event, c=cam_id: _handle_preview_mouse(c, event),
+                            events=['mousedown', 'mousemove', 'mouseup', 'mouseleave'],
+                        ).classes('w-full h-full object-contain')
+                        preview_crop_overlays[cam_id] = ui.element('div').classes(
+                            'absolute pointer-events-none border-2 border-yellow-400 '
+                            'bg-yellow-300/10'
+                        )
                     ui.separator().classes('my-4 w-full')
                     
                     with ui.row().classes('w-full items-center mb-2 gap-2'):
@@ -432,7 +559,23 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                         ).classes('font-mono w-8 text-right')
                     
                     ui.separator().classes('my-2 w-full')
-                    ui.label('Download Settings').classes('font-bold text-gray-700 mt-2')
+                    ui.label('Capture').classes('font-bold text-gray-700 mt-2')
+                    ui.label(
+                        'Multispectral capture uses the exposure, gain, and LED-current '
+                        'values configured in Per LED Config.'
+                    ).classes('text-sm text-gray-500 mt-1')
+                    crop_size_inputs[cam_id] = ui.number(
+                        'Square crop size (sensor pixels)',
+                        value=700,
+                        min=32,
+                        max=min(SENSOR_WIDTH, SENSOR_HEIGHT),
+                        step=1,
+                        on_change=lambda _event, c=cam_id: _update_crop_overlay(c),
+                    ).classes('w-full mt-2')
+                    ui.label(
+                        'Drag the yellow square over the preview to choose an off-center sample.'
+                    ).classes('text-sm text-gray-500 mt-1')
+                    _update_crop_overlay(cam_id)
                     file_name = ui.input('Output Filename', value=f'capture_cam{cam_id}').classes('w-full mt-2')
                     ui.button('Capture & Download (.jpg)', icon='download',
                               on_click=lambda c=cam_id, n=file_name: execute_capture_and_download(c, n.value)
@@ -440,6 +583,9 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                     ui.button('Capture Hypercube (.npz)', icon='download',
                               on_click=lambda c=cam_id, n=file_name: execute_hypercube_capture_and_download(c, n.value)
                              ).classes('w-full mt-2 bg-purple-600 text-white font-bold')
+                    capture_statuses[cam_id] = ui.label('Ready to capture.').classes(
+                        'text-sm text-gray-500 mt-2'
+                    )
 
     # --- PER LED CONFIG TAB ---
     with ui.tab_panel(led_tab).classes('w-full p-0'):
@@ -521,12 +667,18 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
         with ui.row().classes('w-full grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch mt-3'):
             with ui.card().classes('min-w-0 p-3'):
                 band_title = ui.label('Band Viewer').classes('text-lg font-bold')
-                with ui.element('div').classes('w-full h-[300px] bg-gray-100 border flex items-center justify-center overflow-hidden'):
-                    band_image = ui.image().classes('max-w-full max-h-full object-contain')
+                with ui.element('div').classes(
+                    'w-full min-w-0 aspect-video bg-black border overflow-hidden'
+                ) as band_viewer_frame:
+                    band_image = ui.image().props('fit=contain').classes('w-full h-full')
             with ui.card().classes('min-w-0 p-3'):
                 ui.label('False Color Composite').classes('text-lg font-bold')
-                with ui.element('div').classes('w-full h-[300px] bg-gray-100 border flex items-center justify-center overflow-hidden'):
-                    false_color_image = ui.image().classes('max-w-full max-h-full object-contain')
+                with ui.element('div').classes(
+                    'w-full min-w-0 aspect-video bg-black border overflow-hidden'
+                ) as false_color_viewer_frame:
+                    false_color_image = ui.image().props('fit=contain').classes(
+                        'w-full h-full'
+                    )
 
         with ui.card().classes('w-full mt-3 p-3'):
             ui.label('Channel Histogram and False-Color Controls').classes('text-lg font-bold')

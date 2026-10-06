@@ -50,6 +50,8 @@ class CameraHardware:
         self.camera_settings = CameraSettings(**vars(DEFAULT_CAMERA_SETTINGS))
         self.runtime_channels: dict[str, RuntimeChannel] = {}
         self.camera_resolution: tuple[int, int] | None = None
+        self.sensor_resolution = (4608, 2592)
+        self.scaler_crop: tuple[int, int, int, int] | None = None
         profile_path = os.path.join(
             os.path.dirname(__file__), "config", "imx571_spectral_profile.json"
         )
@@ -110,18 +112,28 @@ class CameraHardware:
                 self.led_driver.stop()
         self.runtime_channels.clear()
 
-    def set_resolution(self, high_res: bool) -> None:
+    def set_resolution(
+        self,
+        high_res: bool,
+        scaler_crop: tuple[int, int, int, int] | None = None,
+    ) -> None:
         if self.camera is None:
             return
 
         self.camera.stop()
-        size = (4608, 2592) if high_res else (800, 600)
+        size = (
+            (scaler_crop[2], scaler_crop[3])
+            if high_res and scaler_crop is not None
+            else (4608, 2592) if high_res else (800, 450)
+        )
         self.camera_resolution = size
+        self.scaler_crop = scaler_crop if high_res else None
         config = self.camera.create_preview_configuration(
             main={"size": size, "format": "RGB888"}, buffer_count=2
         )
         self.camera.configure(config)
-        
+        if scaler_crop is not None:
+            self.camera.set_controls({"ScalerCrop": scaler_crop})
         # Apply the default settings dataclass here
         self.camera.set_controls(self.camera_settings.to_control_dict())
         self.camera.start()
@@ -242,14 +254,27 @@ class CameraHardware:
                     processed_frame = self.sensitivity_weighted_rgb(
                         frame, self.sensitivity_profile, wavelength_nm
                     )
-                captured_layers.append((band_name, processed_frame))
+                captured_layers.append(
+                    (
+                        band_name,
+                        np.rint(np.clip(processed_frame, 0, 255)).astype(np.uint8),
+                    )
+                )
                 
         image_height, image_width = captured_layers[0][1].shape
         resolution = self.camera_resolution or (image_width, image_height)
         return MultispectralImage.from_layers(
             captured_layers,
             channels=[channel.config for channel in self.runtime_channels.values()],
-            metadata={"camera": {"resolution": list(resolution)}},
+            metadata={
+                "camera": {
+                    "resolution": list(resolution),
+                    "sensor_resolution": list(self.sensor_resolution),
+                    "scaler_crop": list(self.scaler_crop)
+                    if self.scaler_crop is not None
+                    else None,
+                }
+            },
         )
 
     @contextmanager

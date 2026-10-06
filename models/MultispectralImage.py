@@ -27,6 +27,9 @@ class MultispectralImage:
 
 	Cube data is stored as ``height x width x spectral_channel``. Each spectral
 	slice is expected to be a monochrome image.
+
+	Capture metadata may include the full sensor resolution and the
+	``ScalerCrop`` rectangle used to produce the cube.
 	"""
 
 	SCHEMA_VERSION = 1
