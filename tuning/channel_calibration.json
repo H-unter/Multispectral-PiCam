@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-06T10:07:16.490242+00:00",
+  "target_metric": "mean_monochrome_intensity",
+  "requested_target_mean": 180.0,
+  "achievable_target_mean": 180.0,
+  "darkest_channel_at_start": "red_led_15",
+  "starting_exposure_us": 60000,
+  "hardware_maximum_exposure_us": 77208145,
+  "maximum_exposure_us": 1000000,
+  "crop": null,
+  "capture_resolution": [
+    800,
+    450
+  ],
+  "baseline": {
+    "red_led_0": {
+      "mean": 191.87780833333332,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_1": {
+      "mean": 187.17844722222222,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_2": {
+      "mean": 141.17816944444445,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_3": {
+      "mean": 145.57561666666666,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_4": {
+      "mean": 125.09292222222223,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_5": {
+      "mean": 142.34608333333333,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_6": {
+      "mean": 138.01205555555555,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_7": {
+      "mean": 146.55524166666666,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_8": {
+      "mean": 179.5672277777778,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_9": {
+      "mean": 135.58864722222222,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_10": {
+      "mean": 134.26736666666667,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_11": {
+      "mean": 123.06102222222222,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_12": {
+      "mean": 144.988225,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_13": {
+      "mean": 149.4202611111111,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_14": {
+      "mean": 138.279525,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    },
+    "red_led_15": {
+      "mean": 62.611488888888886,
+      "exposure_time_us": 60000,
+      "applied_exposure_us": 59545
+    }
+  },
+  "channels": {
+    "red_led_0": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 46524,
+      "mean": 181.54135,
+      "applied_exposure_us": 46524,
+      "maximum_mean": 245.63310555555555
+    },
+    "red_led_1": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 50428,
+      "mean": 179.7830361111111,
+      "applied_exposure_us": 50428,
+      "maximum_mean": 244.87546111111112
+    },
+    "red_led_2": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 120730,
+      "mean": 178.91984722222222,
+      "applied_exposure_us": 120730,
+      "maximum_mean": 243.4213
+    },
+    "red_led_3": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 116825,
+      "mean": 179.011875,
+      "applied_exposure_us": 116825,
+      "maximum_mean": 244.79730833333332
+    },
+    "red_led_4": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 124395,
+      "mean": 164.6851638888889,
+      "applied_exposure_us": 124395,
+      "maximum_mean": 238.0335638888889
+    },
+    "red_led_5": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 120730,
+      "mean": 178.05243055555556,
+      "applied_exposure_us": 120730,
+      "maximum_mean": 243.70856666666666
+    },
+    "red_led_6": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 123658,
+      "mean": 178.1014638888889,
+      "applied_exposure_us": 123658,
+      "maximum_mean": 243.01903055555556
+    },
+    "red_led_7": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 109016,
+      "mean": 179.12917222222222,
+      "applied_exposure_us": 109016,
+      "maximum_mean": 245.63206666666667
+    },
+    "red_led_8": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 62142,
+      "mean": 181.77894166666667,
+      "applied_exposure_us": 62142,
+      "maximum_mean": 243.41124444444443
+    },
+    "red_led_9": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 124137,
+      "mean": 174.51788611111112,
+      "applied_exposure_us": 124137,
+      "maximum_mean": 242.022475
+    },
+    "red_led_10": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 124137,
+      "mean": 172.70659444444445,
+      "applied_exposure_us": 124137,
+      "maximum_mean": 241.5313138888889
+    },
+    "red_led_11": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 249620,
+      "mean": 195.38651666666667,
+      "applied_exposure_us": 249620,
+      "maximum_mean": 237.55863888888888
+    },
+    "red_led_12": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 116825,
+      "mean": 180.60832222222223,
+      "applied_exposure_us": 116825,
+      "maximum_mean": 244.70239722222223
+    },
+    "red_led_13": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 109016,
+      "mean": 179.72414166666667,
+      "applied_exposure_us": 109016,
+      "maximum_mean": 245.814625
+    },
+    "red_led_14": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 124395,
+      "mean": 175.5721638888889,
+      "applied_exposure_us": 124395,
+      "maximum_mean": 242.6103222222222
+    },
+    "red_led_15": {
+      "drive_current_ma": 20,
+      "exposure_time_us": 499590,
+      "mean": 177.28315555555557,
+      "applied_exposure_us": 499590,
+      "maximum_mean": 209.66890833333332
+    }
+  }
+}

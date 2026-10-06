@@ -1,5 +1,9 @@
 # config.py
 from dataclasses import dataclass
+import json
+import math
+from pathlib import Path
+from typing import Any
 
 from models import CameraSettings, LEDAttributes, LedDrivingSettings, SpectralChannel, SpectralChannelCollection
 
@@ -37,10 +41,61 @@ SPECTRAL_CHANNELS = SpectralChannelCollection([
         name=f"red_led_{tlc5940_channel}",
         led=LED_name_to_LEDAttributes['red_led'],
         driver=LedDrivingSettings(tlc5940_channel=tlc5940_channel, drive_current_ma=20),
-        camera=CameraSettings(exposure_time_us=10000)
+        camera=CameraSettings(exposure_time_us=60000)
     )
     for tlc5940_channel in range(16)
 ])
+
+DEFAULT_CHANNEL_CALIBRATION_PATH = Path(__file__).parent / "tuning" / "channel_calibration.json"
+
+
+def apply_channel_calibration(
+    calibration_path: str | Path,
+    channels: SpectralChannelCollection = SPECTRAL_CHANNELS,
+) -> dict[str, int]:
+    """Apply exposure settings from a tuning JSON artifact to channel config."""
+    path = Path(calibration_path)
+    with path.open("r", encoding="utf-8") as calibration_file:
+        calibration: Any = json.load(calibration_file)
+
+    if not isinstance(calibration, dict):
+        raise ValueError(f"Calibration file {path} must contain a JSON object")
+    if calibration.get("schema_version") != 1:
+        raise ValueError(f"Unsupported calibration schema in {path}")
+    if calibration.get("target_metric") != "mean_monochrome_intensity":
+        raise ValueError(f"Unsupported calibration metric in {path}")
+
+    channel_results = calibration.get("channels")
+    if not isinstance(channel_results, dict):
+        raise ValueError(f"Calibration file {path} has no channel results")
+
+    configured_names = {channel.name for channel in channels}
+    calibration_names = set(channel_results)
+    missing_names = configured_names - calibration_names
+    unknown_names = calibration_names - configured_names
+    if missing_names or unknown_names:
+        raise ValueError(
+            f"Calibration channels do not match config; "
+            f"missing={sorted(missing_names)}, unknown={sorted(unknown_names)}"
+        )
+
+    applied: dict[str, int] = {}
+    for channel in channels:
+        result = channel_results[channel.name]
+        exposure = result.get("exposure_time_us") if isinstance(result, dict) else None
+        if isinstance(exposure, bool) or not isinstance(exposure, (int, float)):
+            raise ValueError(
+                f"Calibration exposure for {channel.name} is not numeric"
+            )
+        if not math.isfinite(exposure) or exposure <= 0:
+            raise ValueError(
+                f"Calibration exposure for {channel.name} must be positive"
+            )
+        exposure_us = int(round(exposure))
+        channel.camera.exposure_time_us = exposure_us
+        applied[channel.name] = exposure_us
+
+    return applied
 
 
 if __name__ == "__main__":

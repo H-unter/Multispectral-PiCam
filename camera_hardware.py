@@ -27,6 +27,15 @@ from models import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_EXPOSURE_TIME_US = 1_000_000
+SETTLING_MAX_FRAMES = 10
+SETTLING_INITIAL_DELAY_SECONDS = 1.0
+SETTLING_RETRY_DELAY_SECONDS = 0.1
+SETTLING_MEAN_RELATIVE_TOLERANCE = 0.03
+SETTLING_MEAN_ABSOLUTE_TOLERANCE = 2.0
+SETTLING_EXPOSURE_RELATIVE_TOLERANCE = 0.01
+
+
 class RuntimeChannel:
     """Bind a spectral-channel configuration to its TLC5940 output."""
 
@@ -40,9 +49,13 @@ class CameraHardware:
         csi_port: int,
         sensitivity_profile: SensorSensitivityProfile | None = None,
         led_driver: LedDriver | None = None,
+        max_exposure_time_us: int = DEFAULT_MAX_EXPOSURE_TIME_US,
     ) -> None:
+        if max_exposure_time_us <= 0:
+            raise ValueError("max_exposure_time_us must be positive")
         self.camera: Picamera2 | None = None
         self.csi_port = csi_port
+        self.exposure_time_limit_us = max_exposure_time_us
         self.focus_max = 0.0
         self.led_driver = led_driver or LedDriver(r2_ohms=DEFAULT_R2_OHMS)
         self._owns_led_driver = led_driver is None
@@ -73,8 +86,8 @@ class CameraHardware:
         return float(control_range)
 
     @property
-    def max_exposure_time_us(self) -> int:
-        """Return the active camera mode's effective exposure-time ceiling."""
+    def hardware_max_exposure_time_us(self) -> int:
+        """Return the active camera mode's reported exposure-time ceiling."""
         if self.camera is None:
             raise RuntimeError("Camera is not ready")
 
@@ -85,6 +98,22 @@ class CameraHardware:
             self.camera.camera_controls["FrameDurationLimits"]
         )
         return int(min(exposure_max, frame_duration_max))
+
+    @property
+    def max_exposure_time_us(self) -> int:
+        """Return the application exposure ceiling for the active camera mode."""
+        return min(
+            self.exposure_time_limit_us,
+            self.hardware_max_exposure_time_us,
+        )
+
+    def _manual_exposure_controls(self, exposure_us: int) -> dict[str, int | tuple[int, int]]:
+        """Build controls that allow the requested exposure to span a frame."""
+        limited_exposure = min(int(exposure_us), self.max_exposure_time_us)
+        return {
+            "ExposureTime": limited_exposure,
+            "FrameDurationLimits": (limited_exposure, limited_exposure),
+        }
 
     def setup(self) -> None:
         with self._setup_lock:
@@ -139,6 +168,7 @@ class CameraHardware:
         self,
         high_res: bool,
         scaler_crop: tuple[int, int, int, int] | None = None,
+        output_size: tuple[int, int] | None = None,
     ) -> None:
         if self.camera is None:
             return
@@ -147,10 +177,12 @@ class CameraHardware:
         size = (
             (scaler_crop[2], scaler_crop[3])
             if high_res and scaler_crop is not None
-            else (4608, 2592) if high_res else (800, 450)
+            else (4608, 2592)
+            if high_res
+            else output_size or (800, 450)
         )
         self.camera_resolution = size
-        self.scaler_crop = scaler_crop if high_res else None
+        self.scaler_crop = scaler_crop
         config = self.camera.create_preview_configuration(
             main={"size": size, "format": "RGB888"}, buffer_count=2
         )
@@ -204,14 +236,14 @@ class CameraHardware:
             **channel.camera.to_control_dict(),
         }
         if "ExposureTime" in controls:
-            controls["ExposureTime"] = min(
-                int(controls["ExposureTime"]),
-                self.max_exposure_time_us,
+            controls.update(
+                self._manual_exposure_controls(int(controls["ExposureTime"]))
             )
         self.camera.set_controls(controls)
+        time.sleep(SETTLING_INITIAL_DELAY_SECONDS)
 
     def capture_channel_test(self, channel_name: str) -> tuple[np.ndarray, int, int]:
-        """Capture a settled channel frame and return image plus exposure metadata."""
+        """Capture a stable channel frame and return image plus exposure metadata."""
         self.apply_channel_preview_settings(channel_name)
         if self.camera is None:
             raise RuntimeError("Camera is not ready")
@@ -222,28 +254,54 @@ class CameraHardware:
             int(channel.camera.exposure_time_us or 0),
             self.max_exposure_time_us,
         )
-        selected_frame = None
-        applied_exposure = requested_exposure
+        previous_mean: float | None = None
+        previous_applied_exposure: int | None = None
+        applied_exposure = 0
 
-        for _ in range(3):
+        for _ in range(SETTLING_MAX_FRAMES):
             frame = self.camera.capture_array("main")
             metadata = self.camera.capture_metadata()
             applied_exposure = int(metadata.get("ExposureTime", 0))
-            selected_frame = frame
-            if applied_exposure == requested_exposure:
-                break
+            monochrome = self.sensitivity_weighted_rgb(
+                frame,
+                self.sensitivity_profile,
+                wavelength_nm,
+            )
+            stable_image = np.rint(np.clip(monochrome, 0, 255)).astype(np.uint8)
+            current_mean = float(np.mean(stable_image))
+            exposure_matches_request = (
+                abs(applied_exposure - requested_exposure)
+                <= max(1_000, requested_exposure // 20)
+            )
+            exposure_matches_previous = (
+                previous_applied_exposure is not None
+                and abs(applied_exposure - previous_applied_exposure)
+                <= max(1_000, applied_exposure // 100)
+            )
+            if previous_mean is not None and exposure_matches_previous:
+                mean_tolerance = max(
+                    SETTLING_MEAN_ABSOLUTE_TOLERANCE,
+                    abs(previous_mean) * SETTLING_MEAN_RELATIVE_TOLERANCE,
+                )
+                if abs(current_mean - previous_mean) <= mean_tolerance:
+                    if not exposure_matches_request:
+                        logger.warning(
+                            "Using stable applied exposure for %s: "
+                            "requested=%d us, applied=%d us",
+                            channel_name,
+                            requested_exposure,
+                            applied_exposure,
+                        )
+                    return stable_image, requested_exposure, applied_exposure
+            previous_mean = current_mean
+            previous_applied_exposure = applied_exposure
+            time.sleep(SETTLING_RETRY_DELAY_SECONDS)
 
-        if selected_frame is None:
-            raise RuntimeError("Camera returned no test frame")
-        monochrome = self.sensitivity_weighted_rgb(
-            selected_frame,
-            self.sensitivity_profile,
-            wavelength_nm,
-        )
-        return (
-            np.rint(np.clip(monochrome, 0, 255)).astype(np.uint8),
-            requested_exposure,
-            applied_exposure,
+        raise RuntimeError(
+            f"Camera settings did not settle for {channel_name} after "
+            f"{SETTLING_MAX_FRAMES} frames "
+            f"(requested={requested_exposure} us, applied={applied_exposure} us, "
+            f"last_mean={previous_mean})"
         )
 
     def set_channel_current(self, channel_name: str, current_ma: float) -> None:
@@ -322,9 +380,10 @@ class CameraHardware:
                 # Pass the channel's specific CameraSettings dataclass directly
                 channel_controls = rt_channel.config.camera.to_control_dict()
                 if "ExposureTime" in channel_controls:
-                    channel_controls["ExposureTime"] = min(
-                        int(channel_controls["ExposureTime"]),
-                        self.max_exposure_time_us,
+                    channel_controls.update(
+                        self._manual_exposure_controls(
+                            int(channel_controls["ExposureTime"])
+                        )
                     )
                 self.camera.set_controls(channel_controls)
                 time.sleep(0.2)
