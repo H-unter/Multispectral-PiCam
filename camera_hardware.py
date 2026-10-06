@@ -63,6 +63,29 @@ class CameraHardware:
     def is_ready(self) -> bool:
         return self.camera is not None
 
+    @staticmethod
+    def _control_maximum(control_range) -> float:
+        """Extract the maximum from Picamera2 scalar or tuple control ranges."""
+        if isinstance(control_range, (tuple, list)):
+            if len(control_range) < 2:
+                raise ValueError(f"Invalid camera control range: {control_range!r}")
+            return CameraHardware._control_maximum(control_range[1])
+        return float(control_range)
+
+    @property
+    def max_exposure_time_us(self) -> int:
+        """Return the active camera mode's effective exposure-time ceiling."""
+        if self.camera is None:
+            raise RuntimeError("Camera is not ready")
+
+        exposure_max = self._control_maximum(
+            self.camera.camera_controls["ExposureTime"]
+        )
+        frame_duration_max = self._control_maximum(
+            self.camera.camera_controls["FrameDurationLimits"]
+        )
+        return int(min(exposure_max, frame_duration_max))
+
     def setup(self) -> None:
         with self._setup_lock:
             if self.camera is not None:
@@ -166,6 +189,63 @@ class CameraHardware:
             current_ma=self._channel_current_ma(channel),
         )
 
+    def apply_channel_preview_settings(self, channel_name: str) -> None:
+        """Apply one channel's LED and manual camera settings for a test frame."""
+        if self.camera is None:
+            raise RuntimeError("Camera is not ready")
+        if channel_name not in self.runtime_channels:
+            raise ValueError(f"Unknown spectral channel: {channel_name}")
+
+        channel = self.runtime_channels[channel_name].config
+        self.set_active_channel(channel_name)
+        controls = {
+            "AeEnable": False,
+            "AwbEnable": False,
+            **channel.camera.to_control_dict(),
+        }
+        if "ExposureTime" in controls:
+            controls["ExposureTime"] = min(
+                int(controls["ExposureTime"]),
+                self.max_exposure_time_us,
+            )
+        self.camera.set_controls(controls)
+
+    def capture_channel_test(self, channel_name: str) -> tuple[np.ndarray, int, int]:
+        """Capture a settled channel frame and return image plus exposure metadata."""
+        self.apply_channel_preview_settings(channel_name)
+        if self.camera is None:
+            raise RuntimeError("Camera is not ready")
+
+        channel = self.runtime_channels[channel_name].config
+        wavelength_nm = channel.led.peak_wavelength_nm if channel.led else None
+        requested_exposure = min(
+            int(channel.camera.exposure_time_us or 0),
+            self.max_exposure_time_us,
+        )
+        selected_frame = None
+        applied_exposure = requested_exposure
+
+        for _ in range(3):
+            frame = self.camera.capture_array("main")
+            metadata = self.camera.capture_metadata()
+            applied_exposure = int(metadata.get("ExposureTime", 0))
+            selected_frame = frame
+            if applied_exposure == requested_exposure:
+                break
+
+        if selected_frame is None:
+            raise RuntimeError("Camera returned no test frame")
+        monochrome = self.sensitivity_weighted_rgb(
+            selected_frame,
+            self.sensitivity_profile,
+            wavelength_nm,
+        )
+        return (
+            np.rint(np.clip(monochrome, 0, 255)).astype(np.uint8),
+            requested_exposure,
+            applied_exposure,
+        )
+
     def set_channel_current(self, channel_name: str, current_ma: float) -> None:
         if channel_name not in self.runtime_channels:
             raise ValueError(f"Unknown spectral channel: {channel_name}")
@@ -240,7 +320,13 @@ class CameraHardware:
         for band_name, rt_channel in self.runtime_channels.items():
             with self.switch_lighting(rt_channel):
                 # Pass the channel's specific CameraSettings dataclass directly
-                self.camera.set_controls(rt_channel.config.camera.to_control_dict())
+                channel_controls = rt_channel.config.camera.to_control_dict()
+                if "ExposureTime" in channel_controls:
+                    channel_controls["ExposureTime"] = min(
+                        int(channel_controls["ExposureTime"]),
+                        self.max_exposure_time_us,
+                    )
+                self.camera.set_controls(channel_controls)
                 time.sleep(0.2)
                 frame = self.camera.capture_array("main")
                 if process_frame is not None:

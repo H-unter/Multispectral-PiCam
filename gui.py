@@ -54,16 +54,19 @@ cube_path_input: Any = None
 band_select: Any = None
 false_color_selects = []
 band_image: Any = None
-false_color_image: Any = None
 band_viewer_frame: Any = None
-false_color_viewer_frame: Any = None
 histogram_chart: Any = None
 metadata_display: Any = None
 band_title: Any = None
-false_color_positions = [0, 1, 2]
-marker_sliders = []
+# false_color_image: Any = None  # Temporarily disabled; restore with the composite viewer.
+# false_color_viewer_frame: Any = None  # Temporarily disabled with the composite viewer.
+# false_color_positions = [0, 1, 2]  # Temporarily disabled with the composite viewer.
+# marker_sliders = []  # Temporarily disabled with the composite controls.
 focus_sliders = {}
 channel_selector: Any = None
+test_channel_selector: Any = None
+test_snap_image: Any = None
+test_snap_average: Any = None
 channel_cards = {}
 channel_buttons = {}
 capture_statuses = {}
@@ -86,6 +89,19 @@ def _preview_event_position(event) -> tuple[float, float] | None:
         max(0.0, min(PREVIEW_WIDTH, float(x))),
         max(0.0, min(PREVIEW_HEIGHT, float(y))),
     )
+
+
+def limit_exposure_time(channel, event, maximum_us: int) -> None:
+    value = event.value
+    if value is None:
+        return
+    limited_value = min(int(round(float(value))), maximum_us)
+    if value != limited_value:
+        channel.camera.exposure_time_us = limited_value
+        ui.notify(
+            f"Exposure limited to {maximum_us:,} µs by the current camera mode.",
+            type="warning",
+        )
 
 
 def _crop_preview_size(crop_size: int) -> float:
@@ -198,15 +214,17 @@ def _update_viewer() -> None:
     band_title.set_text(f'Band Viewer | {selected_name}{wavelength_text}')
     band_image.set_source(_image_data_uri(_normalize_band(band)))
 
-    selected_indices = [
-        loaded_cube.channel_names[position]
-        for position in false_color_positions
-    ]
-    composite = np.stack(
-        [_normalize_band(loaded_cube.channel(index)) for index in selected_indices],
-        axis=-1,
-    )
-    false_color_image.set_source(_image_data_uri(composite, color=True))
+    # False-colour composite generation is temporarily disabled while the
+    # single-band viewer remains the primary analysis view.
+    # selected_indices = [
+    #     loaded_cube.channel_names[position]
+    #     for position in false_color_positions
+    # ]
+    # composite = np.stack(
+    #     [_normalize_band(loaded_cube.channel(index)) for index in selected_indices],
+    #     axis=-1,
+    # )
+    # false_color_image.set_source(_image_data_uri(composite, color=True))
 
     means = [float(np.mean(loaded_cube.channel(name))) for name in loaded_cube.channel_names]
     _update_chart(histogram_chart, {
@@ -215,28 +233,34 @@ def _update_viewer() -> None:
             'data': loaded_cube.channel_names,
             'axisLabel': {'interval': 0, 'rotate': 25},
         },
-        'yAxis': {'type': 'value'},
+        'yAxis': {
+            'type': 'value',
+            'name': 'Mean pixel intensity',
+            'nameLocation': 'middle',
+            'nameGap': 45,
+            'nameTextStyle': {'fontWeight': 'bold'},
+        },
         'series': [{
             'type': 'bar',
             'data': means,
             'itemStyle': {'color': '#64748b'},
             'emphasis': {'itemStyle': {'color': '#2563eb'}},
-            'markLine': {
-                'symbol': ['none', 'none'],
-                'silent': True,
-                'label': {'show': True},
-                'data': [
-                    {
-                        'xAxis': loaded_cube.channel_names[position],
-                        'name': label,
-                        'lineStyle': {'color': color, 'width': 3},
-                    }
-                    for position, (label, color) in zip(
-                        false_color_positions,
-                        (('R', '#dc2626'), ('G', '#16a34a'), ('B', '#2563eb')),
-                    )
-                ],
-            },
+            # 'markLine': {  # Temporarily disabled with false-colour controls.
+            #     'symbol': ['none', 'none'],
+            #     'silent': True,
+            #     'label': {'show': True},
+            #     'data': [
+            #         {
+            #             'xAxis': loaded_cube.channel_names[position],
+            #             'name': label,
+            #             'lineStyle': {'color': color, 'width': 3},
+            #         }
+            #         for position, (label, color) in zip(
+            #             false_color_positions,
+            #             (('R', '#dc2626'), ('G', '#16a34a'), ('B', '#2563eb')),
+            #         )
+            #     ],
+            # },
         }],
         'grid': {'left': 55, 'right': 25, 'top': 35, 'bottom': 75},
         'tooltip': {'trigger': 'axis'},
@@ -252,13 +276,13 @@ def select_histogram_band(event) -> None:
         _update_viewer()
 
 
-def move_false_color_marker(index: int, event) -> None:
-    if loaded_cube is None:
-        return
-    false_color_positions[index] = max(
-        0, min(int(event.value), len(loaded_cube.channel_names) - 1)
-    )
-    _update_viewer()
+# def move_false_color_marker(index: int, event) -> None:
+#     if loaded_cube is None:
+#         return
+#     false_color_positions[index] = max(
+#         0, min(int(event.value), len(loaded_cube.channel_names) - 1)
+#     )
+#     _update_viewer()
 
 
 def load_cube() -> None:
@@ -269,13 +293,13 @@ def load_cube() -> None:
         options = {name: name for name in loaded_cube.channel_names}
         band_select.options = options
         band_select.value = loaded_cube.channel_names[0]
-        false_color_positions[:] = [
-            min(index, len(loaded_cube.channel_names) - 1)
-            for index in range(3)
-        ]
-        for index, slider in enumerate(marker_sliders):
-            slider.max = len(loaded_cube.channel_names) - 1
-            slider.value = false_color_positions[index]
+        # false_color_positions[:] = [
+        #     min(index, len(loaded_cube.channel_names) - 1)
+        #     for index in range(3)
+        # ]
+        # for index, slider in enumerate(marker_sliders):
+        #     slider.max = len(loaded_cube.channel_names) - 1
+        #     slider.value = false_color_positions[index]
         metadata_display.set_text(json.dumps(loaded_cube.metadata, indent=2))
         _update_viewer()
         ui.notify(f'Loaded {len(loaded_cube.channel_names)} spectral channels', type='positive')
@@ -418,6 +442,48 @@ def select_channel(channel_name):
     except Exception as error:
         logger.exception("Could not select spectral channel %s", channel_name)
         ui.notify(f"Could not select channel: {error}", type="negative")
+
+async def capture_channel_test_snap() -> None:
+    global is_capturing
+    channel_name = test_channel_selector.value if test_channel_selector else None
+    if not channel_name:
+        ui.notify("Select an LED channel to test first.", type="warning")
+        return
+    if is_capturing:
+        ui.notify("Another capture is already in progress.", type="warning")
+        return
+
+    hardware = next(
+        (hw for hw in hardware_instances.values() if hw.is_ready),
+        None,
+    )
+    if hardware is None:
+        ui.notify("Camera hardware is not ready.", type="negative")
+        return
+
+    is_capturing = True
+    test_snap_average.set_text("Capturing...")
+    try:
+        capture_result = await run.io_bound(
+            hardware.capture_channel_test,
+            channel_name,
+        )
+        if capture_result is None:
+            raise RuntimeError("Test snap returned no image")
+        image, requested_exposure, applied_exposure = capture_result
+        test_snap_image.set_source(_image_data_uri(image))
+        test_snap_average.set_text(
+            f"Mean monochrome brightness: {float(np.mean(image)):.2f} / 255 | "
+            f"Exposure requested: {requested_exposure:,} Exposure applied: {applied_exposure:,} µs"
+        )
+        ui.notify(f"Test snap captured for {channel_name}.", type="positive")
+    except Exception as error:
+        logger.exception("Channel test snap failed for %s", channel_name)
+        test_snap_average.set_text("Test snap failed.")
+        ui.notify(f"Could not capture test snap: {error}", type="negative")
+    finally:
+        hardware.led_driver.off()
+        is_capturing = False
 
 def _capture_standard_image(hw, staged_dir, scaler_crop):
     hw.set_resolution(high_res=True, scaler_crop=scaler_crop)
@@ -598,8 +664,38 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
             ),
         ).props('inline')
         ui.label('Select one channel at a time.').classes('text-sm text-gray-500 mb-4')
+        first_test_channel = next(iter(SPECTRAL_CHANNELS), None)
+        with ui.card().classes('w-full p-3 mb-4'):
+            ui.label('Per LED Test Snap').classes('text-xl font-bold')
+            ui.label(
+                'Capture one monochrome frame using the selected channel’s exposure '
+                'and LED current. Analogue gain remains at the camera default.'
+            ).classes('text-sm text-gray-500')
+            with ui.row().classes('w-full items-end gap-3 mt-2'):
+                test_channel_selector = ui.select(
+                    {channel.name: channel.name for channel in SPECTRAL_CHANNELS},
+                    label='Channel to test',
+                    value=first_test_channel.name if first_test_channel else None,
+                ).classes('w-64')
+                ui.button(
+                    'Test Snap',
+                    icon='camera',
+                    on_click=capture_channel_test_snap,
+                ).classes('bg-purple-600 text-white')
+            with ui.row().classes('w-full items-center gap-4 mt-3'):
+                test_snap_image = ui.image().props('fit=contain').classes(
+                    'w-full max-w-2xl aspect-video bg-black border'
+                )
+                test_snap_average = ui.label(
+                    'No test snap captured.'
+                ).classes('text-sm font-mono')
 
         with ui.row().classes('w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 items-stretch'):
+            exposure_limit_us = next(
+                hw.max_exposure_time_us
+                for hw in hardware_instances.values()
+                if hw.is_ready
+            )
             for channel in SPECTRAL_CHANNELS:
                 with ui.card().classes('min-w-0 p-3 flex flex-col') as channel_card:
                     channel_cards[channel.name] = channel_card
@@ -613,9 +709,22 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                     # --- Camera Settings Binding ---
                     ui.label('Camera Settings').classes('text-sm font-bold text-gray-700 mb-1')
                     
-                    # Note the use of bind_value! Changing this input instantly changes channel.camera.exposure_time_us
-                    ui.number('Exposure Time (us)', format='%.0f').bind_value(channel.camera, 'exposure_time_us').classes('w-full mb-1')
-                    ui.number('Analogue Gain', format='%.1f').bind_value(channel.camera, 'analogue_gain').classes('w-full mb-2')
+                    ui.number(
+                        'Exposure Time (µs)',
+                        format='%.0f',
+                        min=1,
+                        max=exposure_limit_us,
+                        step=1,
+                        on_change=lambda event, c=channel, maximum=exposure_limit_us:
+                            limit_exposure_time(c, event, maximum),
+                    ).bind_value(
+                        channel.camera,
+                        'exposure_time_us',
+                    ).classes('w-full mb-1')
+                    ui.label(
+                        f'Camera exposure limit: {exposure_limit_us:,} µs '
+                        f'({exposure_limit_us / 1000:g} ms)'
+                    ).classes('text-xs text-gray-500 mb-2')
 
                     # --- Driver Settings Binding ---
                     ui.label('Driver Settings').classes('text-sm font-bold text-gray-700 mb-1')
@@ -671,33 +780,38 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                     'w-full min-w-0 aspect-video bg-black border overflow-hidden'
                 ) as band_viewer_frame:
                     band_image = ui.image().props('fit=contain').classes('w-full h-full')
-            with ui.card().classes('min-w-0 p-3'):
-                ui.label('False Color Composite').classes('text-lg font-bold')
-                with ui.element('div').classes(
-                    'w-full min-w-0 aspect-video bg-black border overflow-hidden'
-                ) as false_color_viewer_frame:
-                    false_color_image = ui.image().props('fit=contain').classes(
-                        'w-full h-full'
-                    )
+            # with ui.card().classes('min-w-0 p-3'):
+            #     ui.label('False Color Composite').classes('text-lg font-bold')
+            #     with ui.element('div').classes(
+            #         'w-full min-w-0 aspect-video bg-black border overflow-hidden'
+            #     ) as false_color_viewer_frame:
+            #         false_color_image = ui.image().props('fit=contain').classes(
+            #             'w-full h-full'
+            #         )
 
         with ui.card().classes('w-full mt-3 p-3'):
-            ui.label('Channel Histogram and False-Color Controls').classes('text-lg font-bold')
-            ui.label('Click a bar to view that band. Move the colored markers to assign red, green, and blue channels.').classes('text-sm text-gray-500')
+            ui.label('Mean Channel Intensity').classes('text-lg font-bold')
+            ui.label('Click a bar to view that band.').classes('text-sm text-gray-500')
             band_select = ui.select({}, label='Selected band', on_change=lambda _: _update_viewer()).classes('w-64 mt-2')
             histogram_chart = ui.echart({}, on_point_click=select_histogram_band).classes('w-full h-64')
-            with ui.row().classes('w-full items-center gap-4 mt-2'):
-                for index, (label, color) in enumerate((('Red', 'red'), ('Green', 'green'), ('Blue', 'blue'))):
-                    with ui.row().classes('flex-grow items-center gap-2'):
-                        ui.label(label).classes(f'text-{color}-600 font-bold w-12')
-                        marker_sliders.append(
-                            ui.slider(
-                                min=0,
-                                max=2,
-                                step=1,
-                                value=index,
-                                on_change=lambda event, i=index: move_false_color_marker(i, event),
-                            ).classes('flex-grow')
-                        )
+            # False-colour channel sliders are temporarily disabled.
+            # with ui.row().classes('w-full items-center gap-4 mt-2'):
+            #     for index, (label, color) in enumerate(
+            #         (('Red', 'red'), ('Green', 'green'), ('Blue', 'blue'))
+            #     ):
+            #         with ui.row().classes('flex-grow items-center gap-2'):
+            #             ui.label(label).classes(f'text-{color}-600 font-bold w-12')
+            #             marker_sliders.append(
+            #                 ui.slider(
+            #                     min=0,
+            #                     max=2,
+            #                     step=1,
+            #                     value=index,
+            #                     on_change=lambda event, i=index: move_false_color_marker(
+            #                         i, event
+            #                     ),
+            #                 ).classes('flex-grow')
+            #             )
 
 ui.timer(0.5, setup_hardware, once=True)
 ui.timer(float(os.getenv('CAMERA_PREVIEW_INTERVAL', '0.5')), update_live_preview)
