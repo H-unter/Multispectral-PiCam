@@ -17,7 +17,7 @@ class CameraDefinition:
 
 DEFAULT_CAMERA_SETTINGS = CameraSettings(
     ae_enable=True,
-    awb_enable=True,
+    awb_enable=False,
     af_mode=0,
     lens_position=10.0
 )

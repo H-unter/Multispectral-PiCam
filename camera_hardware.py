@@ -359,8 +359,8 @@ class CameraHardware:
         if self.camera is None:
             raise RuntimeError("Camera is not ready")
             
-        # Temporarily enable AE and AWB for standard photo
-        standard_settings = CameraSettings(ae_enable=True, awb_enable=True)
+        # Standard photos may use auto exposure, but never auto white balance.
+        standard_settings = CameraSettings(ae_enable=True, awb_enable=False)
         self.camera.set_controls(standard_settings.to_control_dict())
         time.sleep(1.0)
         
@@ -378,7 +378,10 @@ class CameraHardware:
         for band_name, rt_channel in self.runtime_channels.items():
             with self.switch_lighting(rt_channel):
                 # Pass the channel's specific CameraSettings dataclass directly
-                channel_controls = rt_channel.config.camera.to_control_dict()
+                channel_controls = {
+                    **rt_channel.config.camera.to_control_dict(),
+                    "AwbEnable": False,
+                }
                 if "ExposureTime" in channel_controls:
                     channel_controls.update(
                         self._manual_exposure_controls(
