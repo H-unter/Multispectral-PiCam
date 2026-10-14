@@ -59,17 +59,30 @@ class SensorSensitivityProfile:
     def get_rgb_compensation_weights(
         self, wavelength_nm: int | float | None
     ) -> tuple[float, float, float]:
-        """Return normalized inverse-sensitivity weights in R, G, B order."""
+        """Return normalized sensor-response weights in R, G, B order."""
         if wavelength_nm is None:
             return (1 / 3, 1 / 3, 1 / 3)
 
-        sensitivities = [
+        sensitivities = self.get_rgb_sensitivities(wavelength_nm)
+        total = sum(sensitivities)
+        return (
+            sensitivities[0] / total,
+            sensitivities[1] / total,
+            sensitivities[2] / total,
+        )
+
+    def get_rgb_sensitivities(
+        self, wavelength_nm: int | float | None
+    ) -> tuple[float, float, float]:
+        """Return normalized R, G, B sensor responses at a wavelength."""
+        if wavelength_nm is None:
+            return (1.0, 1.0, 1.0)
+
+        sensitivities = tuple(
             max(self.get_sensitivity(channel, wavelength_nm), 1e-12)
             for channel in SensorChannel
-        ]
-        inverse_sensitivities = [1 / sensitivity for sensitivity in sensitivities]
-        total = sum(inverse_sensitivities)
-        return tuple(weight / total for weight in inverse_sensitivities)
+        )
+        return (sensitivities[0], sensitivities[1], sensitivities[2])
 
 
 # Keep the original name available for callers that already use it.

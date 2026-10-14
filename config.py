@@ -183,11 +183,13 @@ SPECTRAL_CHANNELS = SpectralChannelCollection([
     # )
 ])
 DEFAULT_CHANNEL_CALIBRATION_PATH = Path(__file__).parent / "tuning" / "channel_calibration.json"
+
+
 def apply_channel_calibration(
     calibration_path: str | Path,
     channels: SpectralChannelCollection = SPECTRAL_CHANNELS,
 ) -> dict[str, int]:
-    """Apply exposure settings from a tuning JSON artifact to channel config."""
+    """Apply calibrated exposure and LED-current settings to channel config."""
     path = Path(calibration_path)
     with path.open("r", encoding="utf-8") as calibration_file:
         calibration: Any = json.load(calibration_file)
@@ -226,10 +228,32 @@ def apply_channel_calibration(
                 f"Calibration exposure for {channel.name} must be positive"
             )
         exposure_us = int(round(exposure))
+
+        current = result.get("drive_current_ma") if isinstance(result, dict) else None
+        if isinstance(current, bool) or not isinstance(current, (int, float)):
+            raise ValueError(
+                f"Calibration current for {channel.name} is not numeric"
+            )
+        if not math.isfinite(current) or current <= 0:
+            raise ValueError(
+                f"Calibration current for {channel.name} must be positive"
+            )
+        if channel.led is not None and current > channel.led.max_current_ma:
+            raise ValueError(
+                f"Calibration current for {channel.name} ({current:g} mA) "
+                f"exceeds the LED maximum ({channel.led.max_current_ma:g} mA)"
+            )
+
         channel.camera.exposure_time_us = exposure_us
+        channel.driver.drive_current_ma = float(current)
         applied[channel.name] = exposure_us
 
     return applied
+
+
+# Load the checked-in calibration artifact so all capture entry points use the
+# same per-channel exposure and LED-current settings.
+apply_channel_calibration(DEFAULT_CHANNEL_CALIBRATION_PATH)
 
 
 if __name__ == "__main__":

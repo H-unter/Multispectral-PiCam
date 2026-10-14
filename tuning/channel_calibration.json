@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "created_at": "2026-10-14T11:34:13.736599+00:00",
+  "created_at": "2026-10-14T12:17:43.829479+00:00",
   "target_metric": "mean_monochrome_intensity",
   "requested_target_mean": 180.0,
   "achievable_target_mean": 180.0,
-  "darkest_channel_at_start": "4_810nm_IR",
+  "darkest_channel_at_start": "11_505nm_G",
   "starting_exposure_us": 60000,
   "hardware_maximum_exposure_us": 77208145,
   "maximum_exposure_us": 1000000,
@@ -15,77 +15,77 @@
   ],
   "baseline": {
     "0_1020nm_IR": {
-      "mean": 246.2067888888889,
+      "mean": 255.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "1_950nm_IR": {
-      "mean": 254.6390111111111,
+      "mean": 255.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "2_880nm_IR": {
-      "mean": 244.66407777777778,
+      "mean": 255.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "3_860nm_IR": {
-      "mean": 254.64150833333332,
+      "mean": 255.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "4_810nm_IR": {
-      "mean": 0.2284972222222222,
+      "mean": 254.09114444444444,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "5_765nm_IR": {
-      "mean": 241.7063638888889,
+      "mean": 212.92219166666666,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "6_740nm_IR": {
-      "mean": 244.84884444444444,
+      "mean": 212.50078055555556,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "7_680nm_R": {
-      "mean": 254.66616944444445,
+      "mean": 255.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "8_640nm_R": {
-      "mean": 244.9509111111111,
+      "mean": 253.05151666666666,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "9_606nm_R": {
-      "mean": 35.25247777777778,
+      "mean": 250.95356666666666,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "10_568nm_G": {
-      "mean": 105.40089444444445,
+      "mean": 254.9934888888889,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "11_505nm_G": {
-      "mean": 1.3652444444444445,
+      "mean": 50.123225,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "12_460nm_B": {
-      "mean": 213.31502777777777,
+      "mean": 255.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "13_400nm_UV": {
-      "mean": 112.915475,
+      "mean": 119.4908638888889,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "14_385nm_UV": {
-      "mean": 63.992225,
+      "mean": 254.99869166666667,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     }
@@ -93,108 +93,108 @@
   "channels": {
     "0_1020nm_IR": {
       "drive_current_ma": 100,
-      "exposure_time_us": 14292,
-      "mean": 180.36168333333333,
-      "applied_exposure_us": 14292,
-      "maximum_mean": 254.71447777777777
+      "exposure_time_us": 460,
+      "mean": 178.08451666666667,
+      "applied_exposure_us": 460,
+      "maximum_mean": 255.0
     },
     "1_950nm_IR": {
       "drive_current_ma": 100,
-      "exposure_time_us": 9411,
-      "mean": 180.62994722222223,
-      "applied_exposure_us": 9411,
-      "maximum_mean": 254.707875
+      "exposure_time_us": 663,
+      "mean": 181.12730555555555,
+      "applied_exposure_us": 663,
+      "maximum_mean": 255.0
     },
     "2_880nm_IR": {
       "drive_current_ma": 50,
-      "exposure_time_us": 16244,
-      "mean": 178.8429888888889,
-      "applied_exposure_us": 16244,
-      "maximum_mean": 254.7035527777778
+      "exposure_time_us": 2523,
+      "mean": 179.6229111111111,
+      "applied_exposure_us": 2523,
+      "maximum_mean": 255.0
     },
     "3_860nm_IR": {
       "drive_current_ma": 100,
-      "exposure_time_us": 1804,
-      "mean": 178.12329166666666,
-      "applied_exposure_us": 1804,
-      "maximum_mean": 254.699275
+      "exposure_time_us": 294,
+      "mean": 180.7665638888889,
+      "applied_exposure_us": 294,
+      "maximum_mean": 255.0
     },
     "4_810nm_IR": {
       "drive_current_ma": 60,
-      "exposure_time_us": 999549,
-      "mean": 4.014430555555555,
-      "applied_exposure_us": 999549,
-      "maximum_mean": 4.014430555555555
+      "exposure_time_us": 37978,
+      "mean": 179.54735277777777,
+      "applied_exposure_us": 37978,
+      "maximum_mean": 255.0
     },
     "5_765nm_IR": {
       "drive_current_ma": 50,
-      "exposure_time_us": 5451,
-      "mean": 179.2541388888889,
-      "applied_exposure_us": 5451,
-      "maximum_mean": 254.7185888888889
+      "exposure_time_us": 221,
+      "mean": 182.1757861111111,
+      "applied_exposure_us": 221,
+      "maximum_mean": 255.0
     },
     "6_740nm_IR": {
       "drive_current_ma": 50,
-      "exposure_time_us": 5949,
-      "mean": 179.210375,
-      "applied_exposure_us": 5949,
-      "maximum_mean": 254.7101027777778
+      "exposure_time_us": 313,
+      "mean": 179.315225,
+      "applied_exposure_us": 313,
+      "maximum_mean": 255.0
     },
     "7_680nm_R": {
       "drive_current_ma": 50,
-      "exposure_time_us": 3260,
-      "mean": 181.97849444444444,
-      "applied_exposure_us": 3260,
-      "maximum_mean": 254.6966611111111
+      "exposure_time_us": 589,
+      "mean": 179.71879722222224,
+      "applied_exposure_us": 589,
+      "maximum_mean": 255.0
     },
     "8_640nm_R": {
       "drive_current_ma": 50,
-      "exposure_time_us": 5451,
-      "mean": 181.01417222222221,
-      "applied_exposure_us": 5451,
-      "maximum_mean": 254.6992138888889
+      "exposure_time_us": 249620,
+      "mean": 215.80350833333333,
+      "applied_exposure_us": 249620,
+      "maximum_mean": 254.9934027777778
     },
     "9_606nm_R": {
       "drive_current_ma": 20,
-      "exposure_time_us": 874564,
-      "mean": 178.23826944444446,
-      "applied_exposure_us": 874564,
-      "maximum_mean": 187.59873055555556
+      "exposure_time_us": 28455,
+      "mean": 179.80035833333332,
+      "applied_exposure_us": 28455,
+      "maximum_mean": 254.37335555555555
     },
     "10_568nm_G": {
       "drive_current_ma": 20,
-      "exposure_time_us": 374605,
-      "mean": 192.64874722222223,
-      "applied_exposure_us": 374605,
-      "maximum_mean": 254.4740138888889
+      "exposure_time_us": 6188,
+      "mean": 180.54189166666666,
+      "applied_exposure_us": 6188,
+      "maximum_mean": 254.99731111111112
     },
     "11_505nm_G": {
       "drive_current_ma": 20,
-      "exposure_time_us": 999549,
-      "mean": 6.6398222222222225,
-      "applied_exposure_us": 999549,
-      "maximum_mean": 6.6398222222222225
+      "exposure_time_us": 499590,
+      "mean": 180.9283638888889,
+      "applied_exposure_us": 499590,
+      "maximum_mean": 194.29830555555554
     },
     "12_460nm_B": {
       "drive_current_ma": 20,
-      "exposure_time_us": 25030,
-      "mean": 178.9240638888889,
-      "applied_exposure_us": 25030,
-      "maximum_mean": 252.512075
+      "exposure_time_us": 221,
+      "mean": 181.42376666666667,
+      "applied_exposure_us": 221,
+      "maximum_mean": 226.99114444444444
     },
     "13_400nm_UV": {
       "drive_current_ma": 30,
-      "exposure_time_us": 124635,
-      "mean": 159.79374166666668,
-      "applied_exposure_us": 124635,
-      "maximum_mean": 254.63285555555555
+      "exposure_time_us": 105111,
+      "mean": 178.9180111111111,
+      "applied_exposure_us": 105111,
+      "maximum_mean": 255.0
     },
     "14_385nm_UV": {
       "drive_current_ma": 30,
-      "exposure_time_us": 499590,
-      "mean": 178.0215638888889,
-      "applied_exposure_us": 499590,
-      "maximum_mean": 215.18964166666666
+      "exposure_time_us": 7164,
+      "mean": 181.8251361111111,
+      "applied_exposure_us": 7164,
+      "maximum_mean": 255.0
     }
   }
 }

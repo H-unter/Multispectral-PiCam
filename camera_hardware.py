@@ -361,16 +361,31 @@ class CameraHardware:
         sensitivity_profile: SensorSensitivityProfile,
         wavelength_nm: int | float | None,
     ) -> np.ndarray:
-        """Combine RGB values using inverse sensor sensitivity at a wavelength."""
+        """Estimate wavelength intensity using inverse sensitivity and confidence."""
         if frame.ndim != 3 or frame.shape[-1] not in (3, 4):
             raise ValueError(
                 f"Expected an RGB or four-channel frame, received shape {frame.shape}"
             )
-        weights = np.asarray(
-            sensitivity_profile.get_rgb_compensation_weights(wavelength_nm),
+        rgb = frame[..., -3:].astype(np.float32)
+        sensitivities = np.asarray(
+            sensitivity_profile.get_rgb_sensitivities(wavelength_nm),
             dtype=np.float32,
         )
-        return np.sum(frame[..., -3:] * weights, axis=-1)
+        corrected = rgb / sensitivities
+
+        # Bright channels are more reliable than channels near the noise floor.
+        # Keep the confidence bounded and reduce confidence near saturation.
+        signal_confidence = np.clip(rgb / 32.0, 0.0, 1.0)
+        saturation_confidence = np.clip((255.0 - rgb) / 16.0, 0.0, 1.0)
+        confidence = sensitivities * signal_confidence * saturation_confidence
+        confidence_total = np.sum(confidence, axis=-1)
+        estimate = np.divide(
+            np.sum(corrected * confidence, axis=-1),
+            confidence_total,
+            out=np.mean(corrected, axis=-1),
+            where=confidence_total > 0,
+        )
+        return np.clip(estimate, 0.0, 255.0)
 
     def acquire_standard_photo(
         self,
