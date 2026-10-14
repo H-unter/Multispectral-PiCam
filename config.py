@@ -198,7 +198,10 @@ def apply_channel_calibration(
         raise ValueError(f"Calibration file {path} must contain a JSON object")
     if calibration.get("schema_version") != 1:
         raise ValueError(f"Unsupported calibration schema in {path}")
-    if calibration.get("target_metric") != "mean_monochrome_intensity":
+    if calibration.get("target_metric") not in {
+        "mean_monochrome_intensity",
+        "percentile_monochrome_intensity",
+    }:
         raise ValueError(f"Unsupported calibration metric in {path}")
 
     channel_results = calibration.get("channels")

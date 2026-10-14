@@ -510,19 +510,33 @@ async def capture_channel_test_snap() -> None:
     is_capturing = True
     test_snap_average.set_text("Capturing...")
     try:
-        capture_method = (
-            hardware.capture_no_lighting_test
-            if channel_name == NO_LIGHTING_TEST_CHANNEL
-            else hardware.capture_channel_test
-        )
-        capture_args = () if channel_name == NO_LIGHTING_TEST_CHANNEL else (channel_name,)
-        capture_result = await run.io_bound(capture_method, *capture_args)
+        if channel_name == NO_LIGHTING_TEST_CHANNEL:
+            capture_result = await run.io_bound(
+                hardware.capture_no_lighting_test
+            )
+        else:
+            capture_result = await run.io_bound(
+                hardware.capture_channel_test,
+                channel_name,
+            )
         if capture_result is None:
             raise RuntimeError("Test snap returned no image")
         image, requested_exposure, applied_exposure = capture_result
         test_snap_image.set_source(_image_data_uri(image))
+        image_height, image_width = image.shape[:2]
+        roi_size = min(image_height, image_width)
+        roi_top = (image_height - roi_size) // 2
+        roi_left = (image_width - roi_size) // 2
+        analysis_image = image[
+            roi_top:roi_top + roi_size,
+            roi_left:roi_left + roi_size,
+        ]
         test_snap_average.set_text(
-            f"Mean monochrome brightness: {float(np.mean(image)):.2f} / 255 | "
+            f"Full mean: {float(np.mean(image)):.2f} | "
+            f"center {roi_size}x{roi_size}: "
+            f"P50 {float(np.percentile(analysis_image, 50)):.2f}, "
+            f"P90 {float(np.percentile(analysis_image, 90)):.2f}, "
+            f"P99 {float(np.percentile(analysis_image, 99)):.2f} / 255 | "
             f"Exposure requested: {requested_exposure:,} Exposure applied: {applied_exposure:,} µs"
         )
         channel_label = (

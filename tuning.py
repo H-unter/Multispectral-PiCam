@@ -35,11 +35,21 @@ def _parse_crop(value: str | None) -> tuple[int, int, int, int] | None:
     return left, top, width, height
 
 
-def _capture_mean(
+def _centered_analysis_crop(image: np.ndarray) -> np.ndarray:
+    """Return the centered square analysis region from a calibration frame."""
+    height, width = image.shape[:2]
+    size = min(height, width)
+    top = (height - size) // 2
+    left = (width - size) // 2
+    return image[top:top + size, left:left + size]
+
+
+def _capture_metric(
     hardware: CameraHardware,
     channel_name: str,
     exposure_us: int,
     current_ma: float,
+    percentile: float,
 ) -> tuple[float, int]:
     channel = hardware.runtime_channels[channel_name].config
     channel.camera.exposure_time_us = min(
@@ -48,17 +58,19 @@ def _capture_mean(
     )
     channel.driver.drive_current_ma = current_ma
     image, _, applied_exposure = hardware.capture_channel_test(channel_name)
-    return float(np.mean(image)), applied_exposure
+    analysis_image = _centered_analysis_crop(image)
+    return float(np.percentile(analysis_image, percentile)), applied_exposure
 
 
 def _binary_search_exposure(
     hardware: CameraHardware,
     channel_name: str,
     current_ma: float,
-    target_mean: float,
+    target_metric: float,
     minimum_exposure_us: int,
     maximum_exposure_us: int,
     tolerance: float,
+    percentile: float,
 ) -> dict[str, Any]:
     low = minimum_exposure_us
     high = maximum_exposure_us
@@ -69,26 +81,28 @@ def _binary_search_exposure(
 
     while low <= high:
         candidate = (low + high) // 2
-        measured_mean, applied_exposure = _capture_mean(
+        measured_metric, applied_exposure = _capture_metric(
             hardware,
             channel_name,
             candidate,
             current_ma,
+            percentile,
         )
         logger.info(
-            "  %s: exposure=%d us, applied=%d us, mean=%.2f",
+            "  %s: exposure=%d us, applied=%d us, P%.0f=%.2f",
             channel_name,
             candidate,
             applied_exposure,
-            measured_mean,
+            percentile,
+            measured_metric,
         )
-        if abs(measured_mean - target_mean) < abs(best_mean - target_mean):
+        if abs(measured_metric - target_metric) < abs(best_mean - target_metric):
             best_exposure = applied_exposure
-            best_mean = measured_mean
+            best_mean = measured_metric
             best_applied_exposure = applied_exposure
-        if abs(measured_mean - target_mean) <= tolerance:
+        if abs(measured_metric - target_metric) <= tolerance:
             break
-        if measured_mean < target_mean:
+        if measured_metric < target_metric:
             low = candidate + 1
         else:
             high = candidate - 1
@@ -107,6 +121,7 @@ def calibrate(
     starting_exposure_us: int,
     maximum_exposure_us: int,
     target_mean: float,
+    percentile: float,
     minimum_exposure_us: int,
     tolerance: float,
     crop: tuple[int, int, int, int] | None,
@@ -155,11 +170,12 @@ def calibrate(
             starting_exposure_us,
             max_current_channels[channel.name],
         )
-        mean, applied = _capture_mean(
+        mean, applied = _capture_metric(
             hardware,
             channel.name,
             starting_exposure_us,
             max_current_channels[channel.name],
+            percentile,
         )
         baseline[channel.name] = {
             "mean": mean,
@@ -189,11 +205,12 @@ def calibrate(
             channel.name,
             maximum_exposure_us,
         )
-        maximum_means[channel.name], maximum_applied_exposures[channel.name] = _capture_mean(
+        maximum_means[channel.name], maximum_applied_exposures[channel.name] = _capture_metric(
             hardware,
             channel.name,
             maximum_exposure_us,
             max_current_channels[channel.name],
+            percentile,
         )
         logger.info(
             "  %s maximum mean=%.2f",
@@ -244,6 +261,7 @@ def calibrate(
                 minimum_exposure_us,
                 maximum_exposure_us,
                 tolerance,
+                percentile,
             )
         results[channel.name]["maximum_mean"] = maximum_means[channel.name]
         logger.info(
@@ -256,7 +274,10 @@ def calibrate(
     return {
         "schema_version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "target_metric": "mean_monochrome_intensity",
+        "target_metric": "percentile_monochrome_intensity",
+        "percentile": percentile,
+        "analysis_region": "centered_square",
+        "analysis_resolution": [min(output_size), min(output_size)],
         "requested_target_mean": target_mean,
         "achievable_target_mean": achievable_target,
         "darkest_channel_at_start": darkest_channel,
@@ -276,6 +297,12 @@ def main() -> int:
     )
     parser.add_argument("--output", default="tuning/channel_calibration.json")
     parser.add_argument("--target-mean", type=float, default=180.0)
+    parser.add_argument(
+        "--percentile",
+        type=float,
+        default=90.0,
+        help="Percentile of the centered analysis region to calibrate (default: 90)",
+    )
     parser.add_argument("--starting-exposure-us", type=int, default=60_000)
     parser.add_argument(
         "--maximum-exposure-us",
@@ -300,6 +327,8 @@ def main() -> int:
         parser.error("Tuning currently requires exactly one configured camera")
     if args.target_mean <= 0 or args.target_mean > 255:
         parser.error("--target-mean must be between 0 and 255")
+    if args.percentile <= 0 or args.percentile > 100:
+        parser.error("--percentile must be between 0 and 100")
     if args.minimum_exposure_us <= 0:
         parser.error("--minimum-exposure-us must be positive")
     if args.maximum_exposure_us <= 0:
@@ -322,6 +351,7 @@ def main() -> int:
             starting_exposure_us=args.starting_exposure_us,
             maximum_exposure_us=args.maximum_exposure_us,
             target_mean=args.target_mean,
+            percentile=args.percentile,
             minimum_exposure_us=args.minimum_exposure_us,
             tolerance=args.tolerance,
             crop=crop,
