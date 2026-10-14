@@ -63,6 +63,8 @@ band_title: Any = None
 # false_color_positions = [0, 1, 2]  # Temporarily disabled with the composite viewer.
 # marker_sliders = []  # Temporarily disabled with the composite controls.
 focus_sliders = {}
+focus_min_inputs = {}
+focus_max_inputs = {}
 channel_selector: Any = None
 test_channel_selector: Any = None
 test_snap_image: Any = None
@@ -77,8 +79,16 @@ preview_crop_centers = {
     for cam_id in hardware_instances
 }
 preview_dragging = set()
-preview_crop_overlays = {}
 crop_size_inputs = {}
+NO_LIGHTING_TEST_CHANNEL = '__no_lighting__'
+
+
+ui.add_head_html(
+    '<style>'
+    '.camera-preview img { object-fit: contain; }'
+    '</style>'
+)
+
 
 def _preview_event_position(event) -> tuple[float, float] | None:
     x = getattr(event, 'image_x', None)
@@ -104,23 +114,50 @@ def limit_exposure_time(channel, event, maximum_us: int) -> None:
         )
 
 
+def _focus_bounds(cam_id: str) -> tuple[float, float]:
+    hardware_max = hardware_instances[cam_id].focus_max
+    minimum = max(0.0, min(float(focus_min_inputs[cam_id].value or 0.0), hardware_max))
+    maximum = max(
+        minimum,
+        min(float(focus_max_inputs[cam_id].value or hardware_max), hardware_max),
+    )
+    return minimum, maximum
+
+
+async def _update_focus_range(cam_id: str) -> None:
+    minimum, maximum = _focus_bounds(cam_id)
+    focus_min_inputs[cam_id].value = minimum
+    focus_max_inputs[cam_id].value = maximum
+    slider = focus_sliders[cam_id]
+    slider._props['min'] = minimum
+    slider._props['max'] = maximum
+    slider._props['step'] = 0.025
+    current = max(minimum, min(float(slider.value or minimum), maximum))
+    slider.set_value(current)
+    slider.update()
+    await update_focus(cam_id, current)
+
+
 def _crop_preview_size(crop_size: int) -> float:
     return crop_size * PREVIEW_WIDTH / SENSOR_WIDTH
 
 
 def _update_crop_overlay(cam_id: str) -> None:
-    overlay = preview_crop_overlays.get(cam_id)
-    if overlay is None:
+    viewer = viewers.get(cam_id)
+    if viewer is None:
         return
     crop_size = int(crop_size_inputs[cam_id].value or 700)
     crop_size = max(32, min(crop_size, SENSOR_HEIGHT, SENSOR_WIDTH))
     preview_size = _crop_preview_size(crop_size)
     center_x, center_y = preview_crop_centers[cam_id]
-    left = max(0.0, min(PREVIEW_WIDTH - preview_size, center_x - preview_size / 2))
-    top = max(0.0, min(PREVIEW_HEIGHT - preview_size, center_y - preview_size / 2))
-    overlay.style(
-        f'left: {left:.1f}px; top: {top:.1f}px; '
-        f'width: {preview_size:.1f}px; height: {preview_size:.1f}px;'
+    half_size = preview_size / 2
+    center_x = max(half_size, min(PREVIEW_WIDTH - half_size, center_x))
+    center_y = max(half_size, min(PREVIEW_HEIGHT - half_size, center_y))
+    preview_crop_centers[cam_id][:] = center_x, center_y
+    viewer.set_content(
+        f'<rect x="{center_x - half_size:.1f}" y="{center_y - half_size:.1f}" '
+        f'width="{preview_size:.1f}" height="{preview_size:.1f}" '
+        'fill="rgba(253, 224, 71, 0.1)" stroke="#facc15" stroke-width="2"/>'
     )
 
 
@@ -128,6 +165,15 @@ def _update_crop_center(cam_id: str, event) -> None:
     position = _preview_event_position(event)
     if position is None or is_capturing:
         return
+    crop_size = int(crop_size_inputs[cam_id].value or 700)
+    preview_size = _crop_preview_size(
+        max(32, min(crop_size, SENSOR_HEIGHT, SENSOR_WIDTH))
+    )
+    half_size = preview_size / 2
+    position = (
+        max(half_size, min(PREVIEW_WIDTH - half_size, position[0])),
+        max(half_size, min(PREVIEW_HEIGHT - half_size, position[1])),
+    )
     preview_crop_centers[cam_id][:] = position
     _update_crop_overlay(cam_id)
 
@@ -371,11 +417,11 @@ def update_live_preview():
                         logger.exception("Live preview update failed for camera %s", cam_id)
                         preview_failures.add(cam_id)
 
-def update_focus(cam_id, value):
+async def update_focus(cam_id, value):
     hw = hardware_instances.get(cam_id)
     if hw and hw.is_ready and not is_capturing:
         try:
-            hw.set_focus(float(value))
+            await run.io_bound(hw.set_focus, float(value))
         except Exception:
             logger.exception("Focus update failed for camera %s", cam_id)
 
@@ -464,10 +510,13 @@ async def capture_channel_test_snap() -> None:
     is_capturing = True
     test_snap_average.set_text("Capturing...")
     try:
-        capture_result = await run.io_bound(
-            hardware.capture_channel_test,
-            channel_name,
+        capture_method = (
+            hardware.capture_no_lighting_test
+            if channel_name == NO_LIGHTING_TEST_CHANNEL
+            else hardware.capture_channel_test
         )
+        capture_args = () if channel_name == NO_LIGHTING_TEST_CHANNEL else (channel_name,)
+        capture_result = await run.io_bound(capture_method, *capture_args)
         if capture_result is None:
             raise RuntimeError("Test snap returned no image")
         image, requested_exposure, applied_exposure = capture_result
@@ -476,7 +525,12 @@ async def capture_channel_test_snap() -> None:
             f"Mean monochrome brightness: {float(np.mean(image)):.2f} / 255 | "
             f"Exposure requested: {requested_exposure:,} Exposure applied: {applied_exposure:,} µs"
         )
-        ui.notify(f"Test snap captured for {channel_name}.", type="positive")
+        channel_label = (
+            'no lighting'
+            if channel_name == NO_LIGHTING_TEST_CHANNEL
+            else channel_name
+        )
+        ui.notify(f"Test snap captured for {channel_label}.", type="positive")
     except Exception as error:
         logger.exception("Channel test snap failed for %s", channel_name)
         test_snap_average.set_text("Test snap failed.")
@@ -535,6 +589,48 @@ async def execute_capture_and_download(cam_id, file_name):
         ui.notify(f"Hardware failure: {e}", type="negative")
     finally:
         is_capturing = False
+
+
+async def execute_uncropped_capture_and_download(cam_id, file_name):
+    global is_capturing
+    hw = hardware_instances.get(cam_id)
+    if not hw or not hw.is_ready:
+        return
+    if is_capturing:
+        ui.notify("Another capture is already in progress.", type="warning")
+        return
+
+    is_capturing = True
+    capture_statuses[cam_id].set_text('Capturing uncropped standard image...')
+    ui.notify(f"Capturing uncropped Camera {cam_id}...", type="info")
+
+    try:
+        layers = await run.io_bound(
+            _capture_standard_image,
+            hw,
+            STAGING_DIR,
+            None,
+        )
+
+        if layers:
+            band_name = layers[0][0]
+            staged_file = os.path.join(STAGING_DIR, f"capture_{band_name}.jpg")
+            if os.path.exists(staged_file):
+                ui.download(staged_file, f"{file_name}_uncropped.jpg")
+                capture_statuses[cam_id].set_text(
+                    'Uncropped standard image ready for download.'
+                )
+                ui.notify(
+                    f"Download initiated for {file_name}_uncropped.jpg!",
+                    type="positive",
+                )
+    except Exception as error:
+        capture_statuses[cam_id].set_text('Uncropped image capture failed.')
+        logger.exception("Uncropped standard capture failed for camera %s", cam_id)
+        ui.notify(f"Hardware failure: {error}", type="negative")
+    finally:
+        is_capturing = False
+
 
 async def execute_hypercube_capture_and_download(cam_id, file_name):
     global is_capturing
@@ -602,11 +698,7 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                         viewers[cam_id] = ui.interactive_image(
                             on_mouse=lambda event, c=cam_id: _handle_preview_mouse(c, event),
                             events=['mousedown', 'mousemove', 'mouseup', 'mouseleave'],
-                        ).classes('w-full h-full object-contain')
-                        preview_crop_overlays[cam_id] = ui.element('div').classes(
-                            'absolute pointer-events-none border-2 border-yellow-400 '
-                            'bg-yellow-300/10'
-                        )
+                        ).classes('camera-preview w-full h-full')
                     ui.separator().classes('my-4 w-full')
                     
                     with ui.row().classes('w-full items-center mb-2 gap-2'):
@@ -616,8 +708,25 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                             max=hardware.focus_max,
                             step=0.1,
                             value=hardware.camera_settings.lens_position or 0.0,
-                                                 on_change=lambda e, c=cam_id: update_focus(c, e.value)).classes('flex-grow')
+                            on_change=lambda e, c=cam_id: update_focus(c, e.value),
+                        ).classes('flex-grow')
                         focus_sliders[cam_id] = focus_slider
+                        focus_min_inputs[cam_id] = ui.number(
+                            'Min',
+                            value=0.0,
+                            min=0.0,
+                            max=hardware.focus_max,
+                            step=0.1,
+                            on_change=lambda _event, c=cam_id: _update_focus_range(c),
+                        ).classes('w-24')
+                        focus_max_inputs[cam_id] = ui.number(
+                            'Max',
+                            value=hardware.focus_max,
+                            min=0.0,
+                            max=hardware.focus_max,
+                            step=0.1,
+                            on_change=lambda _event, c=cam_id: _update_focus_range(c),
+                        ).classes('w-24')
                         ui.label().bind_text_from(
                             focus_slider,
                             'value',
@@ -643,9 +752,21 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                     ).classes('text-sm text-gray-500 mt-1')
                     _update_crop_overlay(cam_id)
                     file_name = ui.input('Output Filename', value=f'capture_cam{cam_id}').classes('w-full mt-2')
-                    ui.button('Capture & Download (.jpg)', icon='download',
-                              on_click=lambda c=cam_id, n=file_name: execute_capture_and_download(c, n.value)
-                             ).classes('w-full mt-4 bg-blue-600 text-white font-bold')
+                    with ui.row().classes('w-full gap-2 mt-4'):
+                        ui.button(
+                            'Capture & Download (.jpg)',
+                            icon='download',
+                            on_click=lambda c=cam_id, n=file_name: execute_capture_and_download(
+                                c, n.value
+                            ),
+                        ).classes('flex-1 bg-blue-600 text-white font-bold')
+                        ui.button(
+                            'Capture & Download Uncropped (.jpg)',
+                            icon='download',
+                            on_click=lambda c=cam_id, n=file_name: (
+                                execute_uncropped_capture_and_download(c, n.value)
+                            ),
+                        ).classes('flex-1 bg-green-600 text-white font-bold')
                     ui.button('Capture Hypercube (.npz)', icon='download',
                               on_click=lambda c=cam_id, n=file_name: execute_hypercube_capture_and_download(c, n.value)
                              ).classes('w-full mt-2 bg-purple-600 text-white font-bold')
@@ -669,11 +790,15 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
             ui.label('Per LED Test Snap').classes('text-xl font-bold')
             ui.label(
                 'Capture one monochrome frame using the selected channel’s exposure '
-                'and LED current. Analogue gain remains at the camera default.'
+                'and LED current, or with all lighting disabled. Analogue gain '
+                'remains at the camera default.'
             ).classes('text-sm text-gray-500')
             with ui.row().classes('w-full items-end gap-3 mt-2'):
                 test_channel_selector = ui.select(
-                    {channel.name: channel.name for channel in SPECTRAL_CHANNELS},
+                    {
+                        'No lighting': NO_LIGHTING_TEST_CHANNEL,
+                        **{channel.name: channel.name for channel in SPECTRAL_CHANNELS},
+                    },
                     label='Channel to test',
                     value=first_test_channel.name if first_test_channel else None,
                 ).classes('w-64')

@@ -304,6 +304,26 @@ class CameraHardware:
             f"last_mean={previous_mean})"
         )
 
+    def capture_no_lighting_test(self) -> tuple[np.ndarray, int, int]:
+        """Capture a frame with all LEDs off using the current camera controls."""
+        if self.camera is None:
+            raise RuntimeError("Camera is not ready")
+
+        self.set_active_channel(None)
+        self.camera.set_controls(self.camera_settings.to_control_dict())
+        time.sleep(SETTLING_INITIAL_DELAY_SECONDS)
+
+        frame = self.camera.capture_array("main")
+        metadata = self.camera.capture_metadata()
+        applied_exposure = int(metadata.get("ExposureTime", 0))
+        monochrome = self.sensitivity_weighted_rgb(
+            frame,
+            self.sensitivity_profile,
+            None,
+        )
+        stable_image = np.rint(np.clip(monochrome, 0, 255)).astype(np.uint8)
+        return stable_image, applied_exposure, applied_exposure
+
     def set_channel_current(self, channel_name: str, current_ma: float) -> None:
         if channel_name not in self.runtime_channels:
             raise ValueError(f"Unknown spectral channel: {channel_name}")
