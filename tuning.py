@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Calibrate per-channel exposure times at each LED's maximum safe current.
+"""Calibrate per-channel LED currents and exposure times.
 
 This is intentionally separate from the GUI. It produces a reviewable JSON
 calibration file and does not modify config.py.
@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -35,15 +36,6 @@ def _parse_crop(value: str | None) -> tuple[int, int, int, int] | None:
     return left, top, width, height
 
 
-def _centered_analysis_crop(image: np.ndarray) -> np.ndarray:
-    """Return the centered square analysis region from a calibration frame."""
-    height, width = image.shape[:2]
-    size = min(height, width)
-    top = (height - size) // 2
-    left = (width - size) // 2
-    return image[top:top + size, left:left + size]
-
-
 def _capture_metric(
     hardware: CameraHardware,
     channel_name: str,
@@ -58,8 +50,7 @@ def _capture_metric(
     )
     channel.driver.drive_current_ma = current_ma
     image, _, applied_exposure = hardware.capture_channel_test(channel_name)
-    analysis_image = _centered_analysis_crop(image)
-    return float(np.percentile(analysis_image, percentile)), applied_exposure
+    return float(np.percentile(image, percentile)), applied_exposure
 
 
 def _binary_search_exposure(
@@ -110,9 +101,259 @@ def _binary_search_exposure(
     return {
         "drive_current_ma": current_ma,
         "exposure_time_us": best_exposure,
-        "mean": best_mean,
+        "metric": best_mean,
         "applied_exposure_us": best_applied_exposure,
     }
+
+
+def _warm_start_exposure(
+    hardware: CameraHardware,
+    channel_name: str,
+    current_ma: float,
+    previous_exposure_us: int,
+    target_metric: float,
+    minimum_exposure_us: int,
+    maximum_exposure_us: int,
+    tolerance: float,
+    percentile: float,
+) -> dict[str, Any] | None:
+    """Search around a previous exposure, returning None without a bracket."""
+    previous_exposure_us = max(
+        minimum_exposure_us,
+        min(previous_exposure_us, maximum_exposure_us),
+    )
+    measured_metric, applied_exposure = _capture_metric(
+        hardware,
+        channel_name,
+        previous_exposure_us,
+        current_ma,
+        percentile,
+    )
+    logger.info(
+        "  %s warm start: exposure=%d, applied=%d, P%.0f=%.2f",
+        channel_name,
+        previous_exposure_us,
+        applied_exposure,
+        percentile,
+        measured_metric,
+    )
+    if abs(measured_metric - target_metric) <= tolerance:
+        return {
+            "drive_current_ma": current_ma,
+            "exposure_time_us": applied_exposure,
+            "metric": measured_metric,
+            "applied_exposure_us": applied_exposure,
+        }
+
+    if measured_metric < target_metric:
+        low, high = previous_exposure_us, previous_exposure_us
+        low_metric, high_metric = measured_metric, measured_metric
+        while high < maximum_exposure_us and high_metric < target_metric:
+            low, low_metric = high, high_metric
+            high = min(maximum_exposure_us, max(high + 1, high * 2))
+            high_metric, _ = _capture_metric(
+                hardware, channel_name, high, current_ma, percentile
+            )
+    else:
+        low, high = previous_exposure_us, previous_exposure_us
+        low_metric, high_metric = measured_metric, measured_metric
+        while low > minimum_exposure_us and low_metric > target_metric:
+            high, high_metric = low, low_metric
+            low = max(minimum_exposure_us, low // 2)
+            low_metric, _ = _capture_metric(
+                hardware, channel_name, low, current_ma, percentile
+            )
+
+    if not (low_metric <= target_metric <= high_metric):
+        logger.warning(
+            "  %s warm start could not bracket target; using full search",
+            channel_name,
+        )
+        return None
+
+    return _binary_search_exposure(
+        hardware,
+        channel_name,
+        current_ma,
+        target_metric,
+        low,
+        high,
+        tolerance,
+        percentile,
+    )
+
+
+def _current_grid(max_current_ma: float, minimum_current_ma: float) -> list[float]:
+    """Return descending current candidates for exposure calibration."""
+    if minimum_current_ma <= 0 or max_current_ma <= 0:
+        raise ValueError("Calibration currents must be positive")
+    values = [
+        max_current_ma,
+        max_current_ma * 0.75,
+        max_current_ma * 0.5,
+        max_current_ma * 0.25,
+        max_current_ma * 0.125,
+        minimum_current_ma,
+    ]
+    return sorted(
+        {round(max(minimum_current_ma, value), 2) for value in values},
+        reverse=True,
+    )
+
+
+def _calibrate_channel(
+    hardware: CameraHardware,
+    channel_name: str,
+    max_current_ma: float,
+    minimum_current_ma: float,
+    target_metric: float,
+    minimum_exposure_us: int,
+    maximum_exposure_us: int,
+    tolerance: float,
+    percentile: float,
+    previous_result: dict[str, Any] | None,
+    reuse_previous: bool,
+) -> dict[str, Any]:
+    """Choose a controllable current, then search its exposure."""
+    current_grid = _current_grid(max_current_ma, minimum_current_ma)
+    previous_exposure = (
+        previous_result.get("exposure_time_us")
+        if isinstance(previous_result, dict)
+        else None
+    )
+
+    fallback: dict[str, Any] | None = None
+    for current_ma in current_grid:
+        minimum_metric, minimum_applied = _capture_metric(
+            hardware,
+            channel_name,
+            minimum_exposure_us,
+            current_ma,
+            percentile,
+        )
+        logger.info(
+            "  %s current=%.2f mA minimum exposure P%.0f=%.2f",
+            channel_name,
+            current_ma,
+            percentile,
+            minimum_metric,
+        )
+        if minimum_metric > target_metric + tolerance:
+            logger.info(
+                "  %s remains too bright at minimum exposure; reducing current",
+                channel_name,
+            )
+            fallback = {
+                "drive_current_ma": current_ma,
+                "exposure_time_us": minimum_applied,
+                "metric": minimum_metric,
+                "applied_exposure_us": minimum_applied,
+            }
+            continue
+
+        maximum_metric, maximum_applied = _capture_metric(
+            hardware,
+            channel_name,
+            maximum_exposure_us,
+            current_ma,
+            percentile,
+        )
+        if maximum_metric < target_metric - tolerance:
+            fallback = {
+                "drive_current_ma": current_ma,
+                "exposure_time_us": maximum_applied,
+                "metric": maximum_metric,
+                "applied_exposure_us": maximum_applied,
+            }
+            logger.warning(
+                "  %s cannot reach target at %.2f mA and maximum exposure",
+                channel_name,
+                current_ma,
+            )
+            return fallback
+
+        result = None
+        if (
+            reuse_previous
+            and isinstance(previous_exposure, (int, float))
+            and previous_exposure > 0
+            and isinstance(previous_result, dict)
+            and math.isclose(
+                float(previous_result.get("drive_current_ma", -1)),
+                current_ma,
+                rel_tol=0.01,
+            )
+        ):
+            result = _warm_start_exposure(
+                hardware,
+                channel_name,
+                current_ma,
+                int(previous_exposure),
+                target_metric,
+                minimum_exposure_us,
+                maximum_exposure_us,
+                tolerance,
+                percentile,
+            )
+        if result is None:
+            result = _binary_search_exposure(
+                hardware,
+                channel_name,
+                current_ma,
+                target_metric,
+                minimum_exposure_us,
+                maximum_exposure_us,
+                tolerance,
+                percentile,
+            )
+        return result
+
+    if fallback is None:
+        raise RuntimeError(f"No current candidates available for {channel_name}")
+    return fallback
+
+
+def _calibration_is_compatible(
+    calibration: dict[str, Any],
+    *,
+    percentile: float,
+    output_size: tuple[int, int],
+    crop: tuple[int, int, int, int] | None,
+) -> bool:
+    stored_percentile = calibration.get("percentile")
+    if not isinstance(stored_percentile, (int, float)):
+        return False
+    return (
+        calibration.get("target_metric") == "percentile_monochrome_intensity"
+        and math.isclose(stored_percentile, percentile)
+        and calibration.get("capture_resolution") == list(output_size)
+        and calibration.get("crop") == (list(crop) if crop else None)
+        and calibration.get("analysis_region") == "full_frame"
+    )
+
+
+def _load_previous_calibration(
+    path: str,
+    *,
+    percentile: float,
+    output_size: tuple[int, int],
+    crop: tuple[int, int, int, int] | None,
+) -> dict[str, Any] | None:
+    try:
+        with open(path, "r", encoding="utf-8") as calibration_file:
+            calibration = json.load(calibration_file)
+    except (OSError, json.JSONDecodeError) as error:
+        logger.warning("Could not reuse calibration %s: %s", path, error)
+        return None
+    if not isinstance(calibration, dict) or not _calibration_is_compatible(
+        calibration,
+        percentile=percentile,
+        output_size=output_size,
+        crop=crop,
+    ):
+        logger.warning("Previous calibration is incompatible; using full search")
+        return None
+    return calibration
 
 
 def calibrate(
@@ -122,10 +363,13 @@ def calibrate(
     maximum_exposure_us: int,
     target_mean: float,
     percentile: float,
+    minimum_current_ma: float,
     minimum_exposure_us: int,
     tolerance: float,
     crop: tuple[int, int, int, int] | None,
     output_size: tuple[int, int],
+    previous_calibration: dict[str, Any] | None = None,
+    reuse_previous: bool = False,
 ) -> dict[str, Any]:
     if crop is not None:
         left, top, width, height = crop
@@ -170,7 +414,7 @@ def calibrate(
             starting_exposure_us,
             max_current_channels[channel.name],
         )
-        mean, applied = _capture_metric(
+        metric, applied = _capture_metric(
             hardware,
             channel.name,
             starting_exposure_us,
@@ -178,65 +422,23 @@ def calibrate(
             percentile,
         )
         baseline[channel.name] = {
-            "mean": mean,
+            "metric": metric,
             "exposure_time_us": starting_exposure_us,
             "applied_exposure_us": applied,
         }
         logger.info(
             "  %s baseline mean=%.2f, applied=%d us",
             channel.name,
-            mean,
+            metric,
             applied,
         )
 
-    darkest_channel = min(baseline, key=lambda name: baseline[name]["mean"])
+    darkest_channel = min(baseline, key=lambda name: baseline[name]["metric"])
     logger.info(
         "Darkest baseline channel: %s (mean=%.2f)",
         darkest_channel,
-        baseline[darkest_channel]["mean"],
+        baseline[darkest_channel]["metric"],
     )
-    maximum_means: dict[str, float] = {}
-    maximum_applied_exposures: dict[str, int] = {}
-    for index, channel in enumerate(SPECTRAL_CHANNELS, start=1):
-        logger.info(
-            "[maximum %d/%d] %s at %d us",
-            index,
-            len(SPECTRAL_CHANNELS),
-            channel.name,
-            maximum_exposure_us,
-        )
-        maximum_means[channel.name], maximum_applied_exposures[channel.name] = _capture_metric(
-            hardware,
-            channel.name,
-            maximum_exposure_us,
-            max_current_channels[channel.name],
-            percentile,
-        )
-        logger.info(
-            "  %s maximum mean=%.2f",
-            channel.name,
-            maximum_means[channel.name],
-        )
-
-    achievable_target = target_mean
-    unable_to_reach = {
-        name: mean
-        for name, mean in maximum_means.items()
-        if mean < target_mean - tolerance
-    }
-    logger.info(
-        "Target mean: requested=%.2f",
-        target_mean,
-    )
-    if unable_to_reach:
-        logger.warning(
-            "Channels below target at maximum exposure (they will remain at "
-            "their maximum): %s",
-            ", ".join(
-                f"{name} ({mean:.2f})"
-                for name, mean in unable_to_reach.items()
-            ),
-        )
     results = {}
     for index, channel in enumerate(SPECTRAL_CHANNELS, start=1):
         logger.info(
@@ -245,30 +447,29 @@ def calibrate(
             len(SPECTRAL_CHANNELS),
             channel.name,
         )
-        if maximum_means[channel.name] < achievable_target - tolerance:
-            results[channel.name] = {
-                "drive_current_ma": max_current_channels[channel.name],
-                "exposure_time_us": maximum_applied_exposures[channel.name],
-                "mean": maximum_means[channel.name],
-                "applied_exposure_us": maximum_applied_exposures[channel.name],
-            }
-        else:
-            results[channel.name] = _binary_search_exposure(
-                hardware,
-                channel.name,
-                max_current_channels[channel.name],
-                achievable_target,
-                minimum_exposure_us,
-                maximum_exposure_us,
-                tolerance,
-                percentile,
-            )
-        results[channel.name]["maximum_mean"] = maximum_means[channel.name]
+        previous_result = (
+            previous_calibration.get("channels", {}).get(channel.name)
+            if previous_calibration
+            else None
+        )
+        results[channel.name] = _calibrate_channel(
+            hardware,
+            channel.name,
+            max_current_channels[channel.name],
+            minimum_current_ma,
+            target_mean,
+            minimum_exposure_us,
+            maximum_exposure_us,
+            tolerance,
+            percentile,
+            previous_result if isinstance(previous_result, dict) else None,
+            reuse_previous,
+        )
         logger.info(
-            "  %s result: %d us, mean=%.2f",
+            "  %s result: %d us, metric=%.2f",
             channel.name,
             results[channel.name]["exposure_time_us"],
-            results[channel.name]["mean"],
+            results[channel.name]["metric"],
         )
 
     return {
@@ -276,10 +477,10 @@ def calibrate(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "target_metric": "percentile_monochrome_intensity",
         "percentile": percentile,
-        "analysis_region": "centered_square",
-        "analysis_resolution": [min(output_size), min(output_size)],
-        "requested_target_mean": target_mean,
-        "achievable_target_mean": achievable_target,
+        "analysis_region": "full_frame",
+        "analysis_resolution": list(output_size),
+        "requested_target_metric": target_mean,
+        "minimum_current_ma": minimum_current_ma,
         "darkest_channel_at_start": darkest_channel,
         "starting_exposure_us": starting_exposure_us,
         "hardware_maximum_exposure_us": hardware_exposure_limit_us,
@@ -296,6 +497,16 @@ def main() -> int:
         description="Tune spectral-channel exposure at maximum LED current."
     )
     parser.add_argument("--output", default="tuning/channel_calibration.json")
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Reuse a compatible calibration and skip the maximum-exposure pass",
+    )
+    parser.add_argument(
+        "--previous-calibration",
+        default="tuning/channel_calibration.json",
+        help="Calibration file used by --fast",
+    )
     parser.add_argument("--target-mean", type=float, default=180.0)
     parser.add_argument(
         "--percentile",
@@ -311,6 +522,12 @@ def main() -> int:
         help="Maximum exposure used during calibration (default: 1 second)",
     )
     parser.add_argument("--minimum-exposure-us", type=int, default=100)
+    parser.add_argument(
+        "--minimum-current-ma",
+        type=float,
+        default=1.0,
+        help="Lowest LED current considered by the current grid (default: 1 mA)",
+    )
     parser.add_argument("--tolerance", type=float, default=2.0)
     parser.add_argument(
         "--resolution",
@@ -331,6 +548,8 @@ def main() -> int:
         parser.error("--percentile must be between 0 and 100")
     if args.minimum_exposure_us <= 0:
         parser.error("--minimum-exposure-us must be positive")
+    if args.minimum_current_ma <= 0:
+        parser.error("--minimum-current-ma must be positive")
     if args.maximum_exposure_us <= 0:
         parser.error("--maximum-exposure-us must be positive")
     if args.minimum_exposure_us > args.maximum_exposure_us:
@@ -341,8 +560,19 @@ def main() -> int:
     if len(resolution_parts) != 2 or any(value <= 0 for value in resolution_parts):
         parser.error("--resolution must be WIDTH,HEIGHT with positive values")
     output_size = (resolution_parts[0], resolution_parts[1])
+    previous_calibration = None
+    if args.fast:
+        previous_calibration = _load_previous_calibration(
+            args.previous_calibration,
+            percentile=args.percentile,
+            output_size=output_size,
+            crop=crop,
+        )
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    logger.info("Starting spectral-channel calibration")
+    logger.info(
+        "Starting spectral-channel calibration (%s search)",
+        "warm-start" if previous_calibration is not None else "full",
+    )
     hardware = CameraHardware(csi_port=CAMERA_CONFIG[0].csi_port)
     try:
         hardware.setup()
@@ -352,10 +582,13 @@ def main() -> int:
             maximum_exposure_us=args.maximum_exposure_us,
             target_mean=args.target_mean,
             percentile=args.percentile,
+            minimum_current_ma=args.minimum_current_ma,
             minimum_exposure_us=args.minimum_exposure_us,
             tolerance=args.tolerance,
             crop=crop,
             output_size=output_size,
+            previous_calibration=previous_calibration,
+            reuse_previous=args.fast and previous_calibration is not None,
         )
         output_path = os.path.abspath(args.output)
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
