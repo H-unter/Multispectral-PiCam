@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "created_at": "2026-10-14T13:41:03.546910+00:00",
+  "created_at": "2026-10-14T14:30:05.067030+00:00",
   "target_metric": "percentile_monochrome_intensity",
   "percentile": 90.0,
   "analysis_region": "full_frame",
@@ -10,7 +10,7 @@
   ],
   "requested_target_metric": 180.0,
   "minimum_current_ma": 1.0,
-  "darkest_channel_at_start": "11_505nm_G",
+  "darkest_channel_at_start": "9_606nm_R",
   "starting_exposure_us": 60000,
   "hardware_maximum_exposure_us": 77208145,
   "maximum_exposure_us": 1000000,
@@ -41,7 +41,7 @@
       "applied_exposure_us": 59545
     },
     "4_810nm_IR": {
-      "metric": 255.0,
+      "metric": 141.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
@@ -61,37 +61,37 @@
       "applied_exposure_us": 59545
     },
     "8_640nm_R": {
-      "metric": 255.0,
+      "metric": 61.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "9_606nm_R": {
-      "metric": 255.0,
+      "metric": 5.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "10_568nm_G": {
-      "metric": 255.0,
+      "metric": 242.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "11_505nm_G": {
-      "metric": 67.0,
+      "metric": 45.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "12_460nm_B": {
-      "metric": 255.0,
+      "metric": 27.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "13_400nm_UV": {
-      "metric": 255.0,
+      "metric": 65.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     },
     "14_385nm_UV": {
-      "metric": 255.0,
+      "metric": 61.0,
       "exposure_time_us": 60000,
       "applied_exposure_us": 59545
     }
@@ -99,93 +99,93 @@
   "channels": {
     "0_1020nm_IR": {
       "drive_current_ma": 100,
-      "exposure_time_us": 202,
-      "metric": 179.0,
-      "applied_exposure_us": 202
+      "exposure_time_us": 5949,
+      "metric": 181.0,
+      "applied_exposure_us": 5949
     },
     "1_950nm_IR": {
       "drive_current_ma": 100,
-      "exposure_time_us": 534,
+      "exposure_time_us": 7404,
       "metric": 179.0,
-      "applied_exposure_us": 534
+      "applied_exposure_us": 7404
     },
     "2_880nm_IR": {
       "drive_current_ma": 50,
-      "exposure_time_us": 976,
-      "metric": 180.0,
-      "applied_exposure_us": 976
+      "exposure_time_us": 6427,
+      "metric": 182.0,
+      "applied_exposure_us": 6427
     },
     "3_860nm_IR": {
       "drive_current_ma": 100,
-      "exposure_time_us": 147,
+      "exposure_time_us": 939,
       "metric": 182.0,
-      "applied_exposure_us": 147
+      "applied_exposure_us": 939
     },
     "4_810nm_IR": {
       "drive_current_ma": 60,
-      "exposure_time_us": 607,
-      "metric": 178.0,
-      "applied_exposure_us": 607
+      "exposure_time_us": 85570,
+      "metric": 179.0,
+      "applied_exposure_us": 85570
     },
     "5_765nm_IR": {
-      "drive_current_ma": 12.5,
-      "exposure_time_us": 184,
-      "metric": 178.0,
-      "applied_exposure_us": 184
+      "drive_current_ma": 50,
+      "exposure_time_us": 15268,
+      "metric": 179.0,
+      "applied_exposure_us": 15268
     },
     "6_740nm_IR": {
-      "drive_current_ma": 25.0,
-      "exposure_time_us": 128,
+      "drive_current_ma": 50,
+      "exposure_time_us": 12579,
       "metric": 180.0,
-      "applied_exposure_us": 128
+      "applied_exposure_us": 12579
     },
     "7_680nm_R": {
       "drive_current_ma": 50,
-      "exposure_time_us": 294,
-      "metric": 181.0,
-      "applied_exposure_us": 294
+      "exposure_time_us": 2283,
+      "metric": 180.0,
+      "applied_exposure_us": 2283
     },
     "8_640nm_R": {
-      "drive_current_ma": 12.5,
-      "exposure_time_us": 110,
-      "metric": 181.0,
-      "applied_exposure_us": 110
+      "drive_current_ma": 50,
+      "exposure_time_us": 249795,
+      "metric": 228.0,
+      "applied_exposure_us": 249795
     },
     "9_606nm_R": {
       "drive_current_ma": 20,
-      "exposure_time_us": 17220,
-      "metric": 179.0,
-      "applied_exposure_us": 17220
+      "exposure_time_us": 999549,
+      "metric": 42.0,
+      "applied_exposure_us": 999549
     },
     "10_568nm_G": {
-      "drive_current_ma": 20,
-      "exposure_time_us": 5341,
-      "metric": 180.0,
-      "applied_exposure_us": 5341
+      "drive_current_ma": 15.0,
+      "exposure_time_us": 11363,
+      "metric": 178.0,
+      "applied_exposure_us": 11363
     },
     "11_505nm_G": {
       "drive_current_ma": 20,
-      "exposure_time_us": 378509,
-      "metric": 182.0,
-      "applied_exposure_us": 378509
+      "exposure_time_us": 999549,
+      "metric": 171.0,
+      "applied_exposure_us": 999549
     },
     "12_460nm_B": {
       "drive_current_ma": 15.0,
-      "exposure_time_us": 147,
-      "metric": 189.0,
-      "applied_exposure_us": 147
+      "exposure_time_us": 999549,
+      "metric": 208.0,
+      "applied_exposure_us": 999549
     },
     "13_400nm_UV": {
-      "drive_current_ma": 30,
-      "exposure_time_us": 755,
-      "metric": 185.0,
-      "applied_exposure_us": 755
+      "drive_current_ma": 22.5,
+      "exposure_time_us": 249795,
+      "metric": 171.0,
+      "applied_exposure_us": 249795
     },
     "14_385nm_UV": {
       "drive_current_ma": 30,
-      "exposure_time_us": 3499,
-      "metric": 180.0,
-      "applied_exposure_us": 3499
+      "exposure_time_us": 374605,
+      "metric": 178.0,
+      "applied_exposure_us": 374605
     }
   }
 }

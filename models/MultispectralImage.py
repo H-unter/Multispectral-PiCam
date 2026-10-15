@@ -98,7 +98,7 @@ class MultispectralImage:
 		capture_metadata["channels"] = channel_metadata
 		capture_metadata.setdefault(
 			"pixel_processing",
-			"confidence-weighted inverse-sensitivity estimate of RGB channels",
+			"sensitivity-weighted raw RGB estimate",
 		)
 
 		return cls(np.stack(arrays, axis=-1), names, capture_metadata)

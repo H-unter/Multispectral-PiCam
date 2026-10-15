@@ -4,7 +4,6 @@ import base64
 import json
 import os
 import time
-from uuid import uuid4
 from typing import Any
 
 import cv2
@@ -12,6 +11,7 @@ import numpy as np
 from nicegui import app, run, ui
 
 from config import CAMERA_CONFIG, SPECTRAL_CHANNELS
+from file_naming import sanitize_filename_stem
 from hardware_runtime import hardware_instances, led_driver, shutdown
 from models import MultispectralImage
 
@@ -544,11 +544,16 @@ async def capture_channel_test_snap() -> None:
         hardware.led_driver.off()
         is_capturing = False
 
-def _capture_standard_image(hw, staged_dir, scaler_crop):
+def _capture_standard_image(hw, staged_dir, scaler_crop, output_file):
     hw.set_resolution(high_res=True, scaler_crop=scaler_crop)
     try:
         layers = hw.acquire_standard_photo()
         hw.export_data(layers, staged_dir, "jpg")
+        generated_file = os.path.join(
+            staged_dir,
+            f"capture_{layers[0][0]}.jpg",
+        )
+        os.replace(generated_file, output_file)
         return layers
     finally:
         if hw.is_ready:
@@ -567,6 +572,7 @@ def _capture_hypercube(hw, staged_file, scaler_crop):
 
 async def execute_capture_and_download(cam_id, file_name):
     global is_capturing
+    file_name = sanitize_filename_stem(file_name, f"capture_cam{cam_id}")
     hw = hardware_instances.get(cam_id)
     if not hw or not hw.is_ready: return
     if is_capturing:
@@ -579,11 +585,16 @@ async def execute_capture_and_download(cam_id, file_name):
     
     try:
         crop = _preview_crop_for_capture(cam_id)
-        layers = await run.io_bound(_capture_standard_image, hw, STAGING_DIR, crop)
+        staged_file = os.path.join(STAGING_DIR, f"{file_name}.jpg")
+        layers = await run.io_bound(
+            _capture_standard_image,
+            hw,
+            STAGING_DIR,
+            crop,
+            staged_file,
+        )
         
         if layers:
-            band_name = layers[0][0] 
-            staged_file = os.path.join(STAGING_DIR, f"capture_{band_name}.jpg")
             if os.path.exists(staged_file):
                 ui.download(staged_file, f"{file_name}.jpg")
                 capture_statuses[cam_id].set_text('Standard image ready for download.')
@@ -598,6 +609,7 @@ async def execute_capture_and_download(cam_id, file_name):
 
 async def execute_uncropped_capture_and_download(cam_id, file_name):
     global is_capturing
+    file_name = sanitize_filename_stem(file_name, f"capture_cam{cam_id}")
     hw = hardware_instances.get(cam_id)
     if not hw or not hw.is_ready:
         return
@@ -610,16 +622,16 @@ async def execute_uncropped_capture_and_download(cam_id, file_name):
     ui.notify(f"Capturing uncropped Camera {cam_id}...", type="info")
 
     try:
+        staged_file = os.path.join(STAGING_DIR, f"{file_name}_uncropped.jpg")
         layers = await run.io_bound(
             _capture_standard_image,
             hw,
             STAGING_DIR,
             None,
+            staged_file,
         )
 
         if layers:
-            band_name = layers[0][0]
-            staged_file = os.path.join(STAGING_DIR, f"capture_{band_name}.jpg")
             if os.path.exists(staged_file):
                 ui.download(staged_file, f"{file_name}_uncropped.jpg")
                 capture_statuses[cam_id].set_text(
@@ -639,6 +651,7 @@ async def execute_uncropped_capture_and_download(cam_id, file_name):
 
 async def execute_hypercube_capture_and_download(cam_id, file_name):
     global is_capturing
+    file_name = sanitize_filename_stem(file_name, f"cube_cam{cam_id}")
     hw = hardware_instances.get(cam_id)
     if not hw or not hw.is_ready:
         return
@@ -651,10 +664,7 @@ async def execute_hypercube_capture_and_download(cam_id, file_name):
         'Capturing multispectral cube with the current Per LED Config values...'
     )
     ui.notify(f'Capturing multispectral cube from Camera {cam_id}...', type='info')
-    staged_file = os.path.join(
-        STAGING_DIR,
-        f'.multispectral_cube_{uuid4().hex}.npz',
-    )
+    staged_file = os.path.join(STAGING_DIR, f'{file_name}.npz')
 
     try:
         crop = _preview_crop_for_capture(cam_id)
@@ -756,7 +766,10 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                         'Drag the yellow square over the preview to choose an off-center sample.'
                     ).classes('text-sm text-gray-500 mt-1')
                     _update_crop_overlay(cam_id)
-                    file_name = ui.input('Output Filename', value=f'capture_cam{cam_id}').classes('w-full mt-2')
+                    file_name = ui.input(
+                        'Output filename',
+                        value=f'capture_cam{cam_id}',
+                    ).classes('w-full mt-2')
                     with ui.row().classes('w-full gap-2 mt-4'):
                         ui.button(
                             'Capture & Download (.jpg)',

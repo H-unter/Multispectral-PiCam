@@ -244,6 +244,14 @@ class CameraHardware:
 
     def capture_channel_test(self, channel_name: str) -> tuple[np.ndarray, int, int]:
         """Capture a stable channel frame and return image plus exposure metadata."""
+        return self._capture_stable_channel_frame(channel_name)
+
+    def _capture_stable_channel_frame(
+        self,
+        channel_name: str,
+        process_frame: Callable[[np.ndarray], np.ndarray] | None = None,
+    ) -> tuple[np.ndarray, int, int]:
+        """Capture a channel after camera controls and lighting have stabilized."""
         self.apply_channel_preview_settings(channel_name)
         if self.camera is None:
             raise RuntimeError("Camera is not ready")
@@ -262,10 +270,14 @@ class CameraHardware:
             frame = self.camera.capture_array("main")
             metadata = self.camera.capture_metadata()
             applied_exposure = int(metadata.get("ExposureTime", 0))
-            monochrome = self.sensitivity_weighted_rgb(
-                frame,
-                self.sensitivity_profile,
-                wavelength_nm,
+            monochrome = (
+                process_frame(frame)
+                if process_frame is not None
+                else self.sensitivity_weighted_rgb(
+                    frame,
+                    self.sensitivity_profile,
+                    wavelength_nm,
+                )
             )
             stable_image = np.rint(np.clip(monochrome, 0, 255)).astype(np.uint8)
             current_mean = float(np.mean(stable_image))
@@ -361,6 +373,28 @@ class CameraHardware:
         sensitivity_profile: SensorSensitivityProfile,
         wavelength_nm: int | float | None,
     ) -> np.ndarray:
+        """Estimate wavelength intensity using a sensitivity-weighted raw average."""
+        if frame.ndim != 3 or frame.shape[-1] not in (3, 4):
+            raise ValueError(
+                f"Expected an RGB or four-channel frame, received shape {frame.shape}"
+            )
+        rgb = frame[..., -3:].astype(np.float32)
+        sensitivities = np.asarray(
+            sensitivity_profile.get_rgb_sensitivities(wavelength_nm),
+            dtype=np.float32,
+        )
+        estimate = np.divide(
+            np.sum(rgb * sensitivities, axis=-1),
+            np.sum(sensitivities),
+        )
+        return np.clip(estimate, 0.0, 255.0)
+
+    @staticmethod
+    def inverse_sensitivity_rgb(
+        frame: np.ndarray,
+        sensitivity_profile: SensorSensitivityProfile,
+        wavelength_nm: int | float | None,
+    ) -> np.ndarray:
         """Estimate wavelength intensity using inverse sensitivity and confidence."""
         if frame.ndim != 3 or frame.shape[-1] not in (3, 4):
             raise ValueError(
@@ -373,8 +407,6 @@ class CameraHardware:
         )
         corrected = rgb / sensitivities
 
-        # Bright channels are more reliable than channels near the noise floor.
-        # Keep the confidence bounded and reduce confidence near saturation.
         signal_confidence = np.clip(rgb / 32.0, 0.0, 1.0)
         saturation_confidence = np.clip((255.0 - rgb) / 16.0, 0.0, 1.0)
         confidence = sensitivities * signal_confidence * saturation_confidence
@@ -410,39 +442,38 @@ class CameraHardware:
             raise RuntimeError("Camera is not ready")
 
         captured_layers = []
+        acquisition_metadata = []
         for band_name, rt_channel in self.runtime_channels.items():
-            with self.switch_lighting(rt_channel):
-                # Pass the channel's specific CameraSettings dataclass directly
-                channel_controls = {
-                    **rt_channel.config.camera.to_control_dict(),
-                    "AwbEnable": False,
-                }
-                if "ExposureTime" in channel_controls:
-                    channel_controls.update(
-                        self._manual_exposure_controls(
-                            int(channel_controls["ExposureTime"])
-                        )
+            try:
+                processed_frame, requested_exposure, applied_exposure = (
+                    self._capture_stable_channel_frame(
+                        band_name,
+                        process_frame=process_frame,
                     )
-                self.camera.set_controls(channel_controls)
-                time.sleep(0.2)
-                frame = self.camera.capture_array("main")
-                if process_frame is not None:
-                    processed_frame = process_frame(frame)
-                else:
-                    wavelength_nm = (
-                        rt_channel.config.led.peak_wavelength_nm
-                        if rt_channel.config.led is not None
-                        else None
-                    )
-                    processed_frame = self.sensitivity_weighted_rgb(
-                        frame, self.sensitivity_profile, wavelength_nm
-                    )
+                )
                 captured_layers.append(
                     (
                         band_name,
-                        np.rint(np.clip(processed_frame, 0, 255)).astype(np.uint8),
+                        processed_frame,
                     )
                 )
+                configured_current = self._channel_current_ma(rt_channel.config)
+                acquisition_metadata.append(
+                    {
+                        "name": band_name,
+                        "requested_exposure_us": requested_exposure,
+                        "applied_exposure_us": applied_exposure,
+                        "configured_current_ma": configured_current,
+                        "statistics": {
+                            "mean": float(np.mean(processed_frame)),
+                            "p50": float(np.percentile(processed_frame, 50)),
+                            "p90": float(np.percentile(processed_frame, 90)),
+                            "p99": float(np.percentile(processed_frame, 99)),
+                        },
+                    },
+                )
+            finally:
+                self.led_driver.off()
                 
         image_height, image_width = captured_layers[0][1].shape
         resolution = self.camera_resolution or (image_width, image_height)
@@ -456,7 +487,19 @@ class CameraHardware:
                     "scaler_crop": list(self.scaler_crop)
                     if self.scaler_crop is not None
                     else None,
-                }
+                },
+                "acquisition": {
+                    "settling": {
+                        "initial_delay_seconds": SETTLING_INITIAL_DELAY_SECONDS,
+                        "max_frames": SETTLING_MAX_FRAMES,
+                    },
+                    "bands": acquisition_metadata,
+                },
+                "pixel_processing": (
+                    "sensitivity-weighted raw RGB estimate"
+                    if process_frame is None
+                    else "custom frame processing callback"
+                ),
             },
         )
 
