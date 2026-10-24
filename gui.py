@@ -235,6 +235,16 @@ def _normalize_band(band: np.ndarray) -> np.ndarray:
     return np.clip((band - low) * 255.0 / (high - low), 0, 255).astype(np.uint8)
 
 
+def _prepare_band_for_viewer(band: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Prepare a spectral band without discarding RGB colour information."""
+    band = np.asarray(band)
+    if band.ndim == 3 and band.shape[-1] == 3:
+        if band.dtype != np.uint8:
+            band = np.clip(band, 0, 255).astype(np.uint8)
+        return band, True
+    return _normalize_band(band), False
+
+
 def _update_chart(chart, options: dict) -> None:
     chart.options.clear()
     chart.options.update(options)
@@ -258,7 +268,10 @@ def _update_viewer() -> None:
     wavelength = led_metadata.get('peak_wavelength_nm')
     wavelength_text = f' | {wavelength:g} nm' if wavelength is not None else ''
     band_title.set_text(f'Band Viewer | {selected_name}{wavelength_text}')
-    band_image.set_source(_image_data_uri(_normalize_band(band)))
+    display_band, is_rgb = _prepare_band_for_viewer(band)
+    band_image.set_source(
+        _image_data_uri(display_band, color=is_rgb)
+    )
 
     # False-colour composite generation is temporarily disabled while the
     # single-band viewer remains the primary analysis view.
@@ -521,14 +534,19 @@ async def capture_channel_test_snap() -> None:
             )
         if capture_result is None:
             raise RuntimeError("Test snap returned no image")
-        image, requested_exposure, applied_exposure = capture_result
-        test_snap_image.set_source(_image_data_uri(image))
+        image, _requested_exposure, applied_exposure = capture_result
+        test_snap_image.set_source(
+            _image_data_uri(
+                image,
+                color=image.ndim == 3 and image.shape[-1] == 3,
+            )
+        )
         test_snap_average.set_text(
             f"Full mean: {float(np.mean(image)):.2f} | "
             f"full frame P50 {float(np.percentile(image, 50)):.2f}, "
             f"P90 {float(np.percentile(image, 90)):.2f}, "
             f"P99 {float(np.percentile(image, 99)):.2f} / 255 | "
-            f"Exposure requested: {requested_exposure:,} Exposure applied: {applied_exposure:,} µs"
+            f"Auto exposure applied: {applied_exposure:,} µs"
         )
         channel_label = (
             'no lighting'

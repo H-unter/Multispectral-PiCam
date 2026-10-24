@@ -27,13 +27,12 @@ from models import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_EXPOSURE_TIME_US = 1_000_000
-SETTLING_MAX_FRAMES = 10
+DEFAULT_MAX_EXPOSURE_TIME_US = 300_000
+SETTLING_MAX_FRAMES = 20
 SETTLING_INITIAL_DELAY_SECONDS = 1.0
 SETTLING_RETRY_DELAY_SECONDS = 0.1
-SETTLING_MEAN_RELATIVE_TOLERANCE = 0.03
-SETTLING_MEAN_ABSOLUTE_TOLERANCE = 2.0
 SETTLING_EXPOSURE_RELATIVE_TOLERANCE = 0.01
+SETTLING_GAIN_RELATIVE_TOLERANCE = 0.01
 
 
 class RuntimeChannel:
@@ -114,6 +113,13 @@ class CameraHardware:
             "ExposureTime": limited_exposure,
             "FrameDurationLimits": (limited_exposure, limited_exposure),
         }
+
+    @staticmethod
+    def _camera_frame_to_rgb(frame: np.ndarray) -> np.ndarray:
+        """Convert Picamera2 RGB888 buffers to canonical RGB channel order."""
+        if frame.ndim != 3 or frame.shape[-1] != 3:
+            raise ValueError(f"Expected an RGB888 frame, received shape {frame.shape}")
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     def setup(self) -> None:
         with self._setup_lock:
@@ -222,7 +228,7 @@ class CameraHardware:
         )
 
     def apply_channel_preview_settings(self, channel_name: str) -> None:
-        """Apply one channel's LED and manual camera settings for a test frame."""
+        """Apply one channel's LED and preview-style automatic camera settings."""
         if self.camera is None:
             raise RuntimeError("Camera is not ready")
         if channel_name not in self.runtime_channels:
@@ -230,91 +236,92 @@ class CameraHardware:
 
         channel = self.runtime_channels[channel_name].config
         self.set_active_channel(channel_name)
-        controls = {
-            "AeEnable": False,
-            "AwbEnable": False,
-            **channel.camera.to_control_dict(),
-        }
-        if "ExposureTime" in controls:
-            controls.update(
-                self._manual_exposure_controls(int(controls["ExposureTime"]))
-            )
+        controls = channel.camera.to_control_dict()
+        controls.pop("ExposureTime", None)
+        controls.pop("AnalogueGain", None)
+        controls.update({"AeEnable": True, "AwbEnable": False})
         self.camera.set_controls(controls)
         time.sleep(SETTLING_INITIAL_DELAY_SECONDS)
 
     def capture_channel_test(self, channel_name: str) -> tuple[np.ndarray, int, int]:
         """Capture a stable channel frame and return image plus exposure metadata."""
-        return self._capture_stable_channel_frame(channel_name)
+        image, requested, applied, _settings = self._capture_stable_channel_frame(channel_name)
+        return image, requested, applied
 
     def _capture_stable_channel_frame(
         self,
         channel_name: str,
         process_frame: Callable[[np.ndarray], np.ndarray] | None = None,
-    ) -> tuple[np.ndarray, int, int]:
+    ) -> tuple[np.ndarray, int, int, dict[str, object]]:
         """Capture a channel after camera controls and lighting have stabilized."""
         self.apply_channel_preview_settings(channel_name)
         if self.camera is None:
             raise RuntimeError("Camera is not ready")
 
-        channel = self.runtime_channels[channel_name].config
-        wavelength_nm = channel.led.peak_wavelength_nm if channel.led else None
-        requested_exposure = min(
-            int(channel.camera.exposure_time_us or 0),
-            self.max_exposure_time_us,
-        )
         previous_mean: float | None = None
         previous_applied_exposure: int | None = None
+        previous_analogue_gain: float | None = None
         applied_exposure = 0
+        last_frame: np.ndarray | None = None
+        last_metadata: dict[str, object] = {}
 
         for _ in range(SETTLING_MAX_FRAMES):
-            frame = self.camera.capture_array("main")
+            frame = self._camera_frame_to_rgb(self.camera.capture_array("main"))
             metadata = self.camera.capture_metadata()
             applied_exposure = int(metadata.get("ExposureTime", 0))
-            monochrome = (
+            analogue_gain = float(metadata.get("AnalogueGain", 0.0))
+            stable_image = (
                 process_frame(frame)
                 if process_frame is not None
-                else self.sensitivity_weighted_rgb(
-                    frame,
-                    self.sensitivity_profile,
-                    wavelength_nm,
-                )
+                else frame
             )
-            stable_image = np.rint(np.clip(monochrome, 0, 255)).astype(np.uint8)
+            stable_image = np.clip(stable_image, 0, 255).astype(np.uint8)
+            last_frame = stable_image
+            last_metadata = {
+                "ExposureTime": metadata.get("ExposureTime"),
+                "AnalogueGain": metadata.get("AnalogueGain"),
+                "AeEnable": metadata.get("AeEnable"),
+                "AwbEnable": metadata.get("AwbEnable"),
+                "FrameDuration": metadata.get("FrameDuration"),
+                "settling_completed": False,
+            }
             current_mean = float(np.mean(stable_image))
-            exposure_matches_request = (
-                abs(applied_exposure - requested_exposure)
-                <= max(1_000, requested_exposure // 20)
-            )
             exposure_matches_previous = (
                 previous_applied_exposure is not None
                 and abs(applied_exposure - previous_applied_exposure)
-                <= max(1_000, applied_exposure // 100)
-            )
-            if previous_mean is not None and exposure_matches_previous:
-                mean_tolerance = max(
-                    SETTLING_MEAN_ABSOLUTE_TOLERANCE,
-                    abs(previous_mean) * SETTLING_MEAN_RELATIVE_TOLERANCE,
+                <= max(
+                    1_000,
+                    int(applied_exposure * SETTLING_EXPOSURE_RELATIVE_TOLERANCE),
                 )
-                if abs(current_mean - previous_mean) <= mean_tolerance:
-                    if not exposure_matches_request:
-                        logger.warning(
-                            "Using stable applied exposure for %s: "
-                            "requested=%d us, applied=%d us",
-                            channel_name,
-                            requested_exposure,
-                            applied_exposure,
-                        )
-                    return stable_image, requested_exposure, applied_exposure
+            )
+            gain_matches_previous = (
+                previous_analogue_gain is not None
+                and abs(analogue_gain - previous_analogue_gain)
+                <= max(
+                    0.01,
+                    abs(analogue_gain) * SETTLING_GAIN_RELATIVE_TOLERANCE,
+                )
+            )
+            if previous_applied_exposure is not None and exposure_matches_previous and gain_matches_previous:
+                last_metadata["settling_completed"] = True
+                return stable_image, applied_exposure, applied_exposure, last_metadata
             previous_mean = current_mean
             previous_applied_exposure = applied_exposure
+            previous_analogue_gain = analogue_gain
             time.sleep(SETTLING_RETRY_DELAY_SECONDS)
 
-        raise RuntimeError(
-            f"Camera settings did not settle for {channel_name} after "
-            f"{SETTLING_MAX_FRAMES} frames "
-            f"(requested={requested_exposure} us, applied={applied_exposure} us, "
-            f"last_mean={previous_mean})"
+        if last_frame is None:
+            raise RuntimeError(f"Camera returned no frame for {channel_name}")
+        logger.warning(
+            "Camera settings did not fully settle for %s after %d frames; "
+            "using the latest frame (exposure=%d us, gain=%s, mean=%.2f)",
+            channel_name,
+            SETTLING_MAX_FRAMES,
+            applied_exposure,
+            last_metadata.get("AnalogueGain"),
+            previous_mean,
         )
+        return last_frame, applied_exposure, applied_exposure, last_metadata
 
     def capture_no_lighting_test(self) -> tuple[np.ndarray, int, int]:
         """Capture a frame with all LEDs off using the current camera controls."""
@@ -325,7 +332,7 @@ class CameraHardware:
         self.camera.set_controls(self.camera_settings.to_control_dict())
         time.sleep(SETTLING_INITIAL_DELAY_SECONDS)
 
-        frame = self.camera.capture_array("main")
+        frame = self._camera_frame_to_rgb(self.camera.capture_array("main"))
         metadata = self.camera.capture_metadata()
         applied_exposure = int(metadata.get("ExposureTime", 0))
         monochrome = self.sensitivity_weighted_rgb(
@@ -445,7 +452,7 @@ class CameraHardware:
         acquisition_metadata = []
         for band_name, rt_channel in self.runtime_channels.items():
             try:
-                processed_frame, requested_exposure, applied_exposure = (
+                processed_frame, requested_exposure, applied_exposure, settled_settings = (
                     self._capture_stable_channel_frame(
                         band_name,
                         process_frame=process_frame,
@@ -463,6 +470,7 @@ class CameraHardware:
                         "name": band_name,
                         "requested_exposure_us": requested_exposure,
                         "applied_exposure_us": applied_exposure,
+                        "auto_settings": settled_settings,
                         "configured_current_ma": configured_current,
                         "statistics": {
                             "mean": float(np.mean(processed_frame)),
@@ -475,7 +483,7 @@ class CameraHardware:
             finally:
                 self.led_driver.off()
                 
-        image_height, image_width = captured_layers[0][1].shape
+        image_height, image_width = captured_layers[0][1].shape[:2]
         resolution = self.camera_resolution or (image_width, image_height)
         return MultispectralImage.from_layers(
             captured_layers,
@@ -495,8 +503,12 @@ class CameraHardware:
                     },
                     "bands": acquisition_metadata,
                 },
+                "auto_exposure_settings": {
+                    band["name"]: band["auto_settings"]
+                    for band in acquisition_metadata
+                },
                 "pixel_processing": (
-                    "sensitivity-weighted raw RGB estimate"
+                    "raw RGB frame"
                     if process_frame is None
                     else "custom frame processing callback"
                 ),

@@ -43,7 +43,10 @@ def main() -> None:
                     output_path = os.path.join(
                         OUTPUT_DIR, f"{output_name}_{safe_band_name}.jpg"
                     )
-                    if not cv2.imwrite(output_path, image.channel(band_name)):
+                    band = image.channel(band_name)
+                    if band.ndim == 3 and band.shape[-1] == 3:
+                        band = cv2.cvtColor(band, cv2.COLOR_RGB2BGR)
+                    if not cv2.imwrite(output_path, band):
                         raise IOError(f"Could not write {output_path}")
         else:
             layers = hardware.acquire_standard_photo()

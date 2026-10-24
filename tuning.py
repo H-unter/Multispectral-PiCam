@@ -184,20 +184,24 @@ def _warm_start_exposure(
 
 
 def _current_grid(max_current_ma: float, minimum_current_ma: float) -> list[float]:
-    """Return descending current candidates for exposure calibration."""
+    """Return ascending current candidates for exposure calibration."""
     if minimum_current_ma <= 0 or max_current_ma <= 0:
         raise ValueError("Calibration currents must be positive")
+    if minimum_current_ma > max_current_ma:
+        raise ValueError("Starting current cannot exceed the channel maximum")
     values = [
-        max_current_ma,
-        max_current_ma * 0.75,
-        max_current_ma * 0.5,
-        max_current_ma * 0.25,
         max_current_ma * 0.125,
+        max_current_ma * 0.25,
+        max_current_ma * 0.5,
+        max_current_ma * 0.75,
+        max_current_ma,
         minimum_current_ma,
     ]
     return sorted(
-        {round(max(minimum_current_ma, value), 2) for value in values},
-        reverse=True,
+        {
+            round(min(max_current_ma, max(minimum_current_ma, value)), 2)
+            for value in values
+        }
     )
 
 
@@ -214,7 +218,7 @@ def _calibrate_channel(
     previous_result: dict[str, Any] | None,
     reuse_previous: bool,
 ) -> dict[str, Any]:
-    """Choose a controllable current, then search its exposure."""
+    """Start at the safe current and increase it only when P90 is too low."""
     current_grid = _current_grid(max_current_ma, minimum_current_ma)
     previous_exposure = (
         previous_result.get("exposure_time_us")
@@ -240,16 +244,15 @@ def _calibrate_channel(
         )
         if minimum_metric > target_metric + tolerance:
             logger.info(
-                "  %s remains too bright at minimum exposure; reducing current",
+                "  %s remains too bright at minimum exposure at the starting current",
                 channel_name,
             )
-            fallback = {
+            return {
                 "drive_current_ma": current_ma,
                 "exposure_time_us": minimum_applied,
                 "metric": minimum_metric,
                 "applied_exposure_us": minimum_applied,
             }
-            continue
 
         maximum_metric, maximum_applied = _capture_metric(
             hardware,
@@ -266,11 +269,11 @@ def _calibrate_channel(
                 "applied_exposure_us": maximum_applied,
             }
             logger.warning(
-                "  %s cannot reach target at %.2f mA and maximum exposure",
+                "  %s cannot reach target at %.2f mA and maximum exposure; increasing current",
                 channel_name,
                 current_ma,
             )
-            return fallback
+            continue
 
         result = None
         if (
@@ -403,6 +406,10 @@ def calibrate(
         )
         for channel in SPECTRAL_CHANNELS
     }
+    starting_current_channels = {
+        channel_name: min(minimum_current_ma, max_current)
+        for channel_name, max_current in max_current_channels.items()
+    }
 
     baseline: dict[str, dict[str, float | int]] = {}
     for index, channel in enumerate(SPECTRAL_CHANNELS, start=1):
@@ -412,13 +419,13 @@ def calibrate(
             len(SPECTRAL_CHANNELS),
             channel.name,
             starting_exposure_us,
-            max_current_channels[channel.name],
+            starting_current_channels[channel.name],
         )
         metric, applied = _capture_metric(
             hardware,
             channel.name,
             starting_exposure_us,
-            max_current_channels[channel.name],
+            starting_current_channels[channel.name],
             percentile,
         )
         baseline[channel.name] = {
@@ -456,7 +463,7 @@ def calibrate(
             hardware,
             channel.name,
             max_current_channels[channel.name],
-            minimum_current_ma,
+            starting_current_channels[channel.name],
             target_mean,
             minimum_exposure_us,
             maximum_exposure_us,
@@ -525,8 +532,8 @@ def main() -> int:
     parser.add_argument(
         "--minimum-current-ma",
         type=float,
-        default=1.0,
-        help="Lowest LED current considered by the current grid (default: 1 mA)",
+        default=10.0,
+        help="Starting LED current; increase only if P90 cannot be reached (default: 10 mA)",
     )
     parser.add_argument("--tolerance", type=float, default=2.0)
     parser.add_argument(

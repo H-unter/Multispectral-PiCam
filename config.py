@@ -254,9 +254,9 @@ def apply_channel_calibration(
     return applied
 
 
-# Load the checked-in calibration artifact so all capture entry points use the
-# same per-channel exposure and LED-current settings.
-apply_channel_calibration(DEFAULT_CHANNEL_CALIBRATION_PATH)
+# Manual calibration is retained as an explicit tuning utility, but capture
+# uses automatic exposure and should not overwrite the configured defaults.
+# apply_channel_calibration(DEFAULT_CHANNEL_CALIBRATION_PATH)
 
 
 if __name__ == "__main__":

@@ -25,8 +25,8 @@ except ImportError:
 class MultispectralImage:
 	"""Own a multispectral cube, its channel metadata, and its file formats.
 
-	Cube data is stored as ``height x width x spectral_channel``. Each spectral
-	slice is expected to be a monochrome image.
+	Cube data is stored as ``height x width x spectral_channel`` for monochrome
+	layers or ``height x width x colour x spectral_channel`` for RGB layers.
 
 	Capture metadata may include the full sensor resolution and the
 	``ScalerCrop`` rectangle used to produce the cube.
@@ -41,8 +41,8 @@ class MultispectralImage:
 		metadata: dict[str, Any] | None = None,
 	) -> None:
 		data = np.asarray(data)
-		if data.ndim != 3:
-			raise ValueError(f"Expected a 3D cube, received shape {data.shape}")
+		if data.ndim not in (3, 4):
+			raise ValueError(f"Expected a 3D or 4D cube, received shape {data.shape}")
 		if data.shape[-1] != len(channel_names):
 			raise ValueError(
 				"The number of channel names must match the cube's final dimension"
@@ -61,7 +61,7 @@ class MultispectralImage:
 		channels: Iterable[SpectralChannel] | None = None,
 		metadata: dict[str, Any] | None = None,
 	) -> "MultispectralImage":
-		"""Build a cube from named monochrome layers in capture order."""
+		"""Build a cube from named monochrome or RGB layers in capture order."""
 		layer_list = list(layers)
 		if not layer_list:
 			raise ValueError("At least one spectral layer is required")
@@ -71,8 +71,8 @@ class MultispectralImage:
 		first_shape = arrays[0].shape
 		if any(array.shape != first_shape for array in arrays):
 			raise ValueError("All spectral layers must have the same dimensions")
-		if any(array.ndim != 2 for array in arrays):
-			raise ValueError("Spectral layers must be monochrome 2D arrays")
+		if any(array.ndim not in (2, 3) for array in arrays):
+			raise ValueError("Spectral layers must be 2D monochrome or 3D RGB arrays")
 
 		channel_metadata = []
 		channel_lookup = {channel.name: channel for channel in channels or []}
@@ -91,14 +91,12 @@ class MultispectralImage:
 		capture_metadata.setdefault(
 			"created_at", datetime.now(timezone.utc).isoformat()
 		)
-		capture_metadata["data_shape"] = list(
-			(first_shape[0], first_shape[1], len(arrays))
-		)
+		capture_metadata["data_shape"] = list(first_shape) + [len(arrays)]
 		capture_metadata["data_dtype"] = str(np.result_type(*arrays))
 		capture_metadata["channels"] = channel_metadata
 		capture_metadata.setdefault(
 			"pixel_processing",
-			"sensitivity-weighted raw RGB estimate",
+			"raw RGB frame" if len(first_shape) == 3 else "monochrome",
 		)
 
 		return cls(np.stack(arrays, axis=-1), names, capture_metadata)
@@ -114,7 +112,7 @@ class MultispectralImage:
 		}
 
 	def channel(self, name: str) -> np.ndarray:
-		"""Return one monochrome spectral slice by channel name."""
+		"""Return one spectral slice by channel name."""
 		try:
 			index = self.channel_names.index(name)
 		except ValueError as error:
@@ -143,12 +141,14 @@ class MultispectralImage:
 		)
 
 	def export_jpgs(self, target_dir: str) -> None:
-		"""Export one monochrome JPG and a JSON metadata file per cube package."""
+		"""Export one image and a JSON metadata file per cube package."""
 		os.makedirs(target_dir, exist_ok=True)
 		for index, name in enumerate(self.channel_names):
 			safe_name = name.replace(os.sep, "_").replace(" ", "_")
 			output_file = os.path.join(target_dir, f"capture_{safe_name}.jpg")
 			image = np.clip(self.data[..., index], 0, 255).astype(np.uint8)
+			if image.ndim == 3 and image.shape[-1] == 3:
+				image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 			if not cv2.imwrite(output_file, image):
 				raise IOError(f"Could not write {output_file}")
 
