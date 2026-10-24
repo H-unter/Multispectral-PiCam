@@ -3,6 +3,7 @@ import logging
 import base64
 import json
 import os
+import re
 import time
 from typing import Any
 
@@ -36,6 +37,11 @@ if os.getenv('CAMERA_GUI_PROFILE') and not getattr(app, '_camera_profile_middlew
 
 STAGING_DIR = os.path.abspath('./images')
 CUBE_PATH = os.path.join(STAGING_DIR, 'multispectral_cube.npz')
+VIAL_METADATA_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    'config',
+    'vial_metadata.json',
+)
 PORT = int(os.getenv('CAMERA_GUI_PORT', '8080'))
 os.makedirs(STAGING_DIR, exist_ok=True)
 
@@ -80,6 +86,8 @@ preview_crop_centers = {
 }
 preview_dragging = set()
 crop_size_inputs = {}
+fly_sample_checkboxes = {}
+vial_number_inputs = {}
 NO_LIGHTING_TEST_CHANNEL = '__no_lighting__'
 
 
@@ -213,6 +221,69 @@ def _preview_crop_for_capture(cam_id: str) -> tuple[int, int, int, int]:
     left = max(0, min(int(round(left)), SENSOR_WIDTH - crop_size))
     top = max(0, min(int(round(top)), SENSOR_HEIGHT - crop_size))
     return left, top, crop_size, crop_size
+
+
+def _load_vial_metadata(vial_number: str) -> dict[str, Any]:
+    """Return metadata for a configured vial number."""
+    vial_number = vial_number.strip()
+    if not vial_number:
+        raise ValueError('Enter a vial number for a fly sample.')
+
+    with open(VIAL_METADATA_PATH, encoding='utf-8') as metadata_file:
+        metadata = json.load(metadata_file)
+
+    if not isinstance(metadata, dict):
+        raise ValueError(f'Vial metadata must be a JSON object: {VIAL_METADATA_PATH}')
+    vial_record = metadata.get(vial_number)
+    if not isinstance(vial_record, dict):
+        raise ValueError(f'Vial number {vial_number} was not found in the metadata file.')
+    return dict(vial_record)
+
+
+def _next_fly_sample_filename(
+    vial_number: str,
+    sample_identifier: str,
+    target_dir: str = STAGING_DIR,
+) -> str:
+    """Return the next available filename for a vial sample."""
+    vial_number = vial_number.strip()
+    sample_identifier = sample_identifier.strip().lower()
+    if not vial_number:
+        raise ValueError('Enter a vial number for a fly sample.')
+    if not re.fullmatch(r'[a-z]', sample_identifier):
+        raise ValueError('Sample identifier must be one letter, such as a.')
+
+    prefix = f'{vial_number}_{sample_identifier}_'
+    pattern = re.compile(rf'^{re.escape(prefix)}(\d+)\.npz$')
+    sequence_numbers = [
+        int(match.group(1))
+        for filename in os.listdir(target_dir)
+        if (match := pattern.fullmatch(filename))
+    ]
+    next_sequence = max(sequence_numbers, default=0) + 1
+    return f'{prefix}{next_sequence}'
+
+
+def _set_fly_sample_filename(file_name, vial_number, sample_identifier) -> None:
+    try:
+        file_name.value = _next_fly_sample_filename(
+            vial_number.value or '',
+            sample_identifier.value or '',
+        )
+    except ValueError:
+        file_name.value = ''
+
+
+def _toggle_fly_sample_fields(event, file_name, vial_number, sample_identifier) -> None:
+    if event.value:
+        file_name.disable()
+        vial_number.enable()
+        sample_identifier.enable()
+        _set_fly_sample_filename(file_name, vial_number, sample_identifier)
+    else:
+        file_name.enable()
+        vial_number.disable()
+        sample_identifier.disable()
 
 
 def _image_data_uri(image: np.ndarray, color: bool = False) -> str:
@@ -578,10 +649,21 @@ def _capture_standard_image(hw, staged_dir, scaler_crop, output_file):
             hw.set_resolution(high_res=False)
 
 
-def _capture_hypercube(hw, staged_file, scaler_crop):
+def _capture_hypercube(
+    hw,
+    staged_file,
+    scaler_crop,
+    vial_number=None,
+    vial_metadata=None,
+    sample_identifier=None,
+):
     hw.set_resolution(high_res=True, scaler_crop=scaler_crop)
     try:
         image = hw.acquire_spectral_cube()
+        if vial_number is not None:
+            image.metadata['vial_number'] = vial_number
+            image.metadata['vial_metadata'] = vial_metadata
+            image.metadata['sample_identifier'] = sample_identifier
         image.export_npz(staged_file)
     finally:
         if hw.is_ready:
@@ -596,8 +678,8 @@ async def execute_capture_and_download(cam_id, file_name):
     if is_capturing:
         ui.notify("Another capture is already in progress.", type="warning")
         return
-        
-    is_capturing = True 
+
+    is_capturing = True
     capture_statuses[cam_id].set_text('Capturing standard image...')
     ui.notify(f"Capturing Camera {cam_id}...", type="info")
     
@@ -667,7 +749,12 @@ async def execute_uncropped_capture_and_download(cam_id, file_name):
         is_capturing = False
 
 
-async def execute_hypercube_capture_and_download(cam_id, file_name):
+async def execute_hypercube_capture_and_download(
+    cam_id,
+    file_name,
+    vial_number=None,
+    sample_identifier=None,
+):
     global is_capturing
     file_name = sanitize_filename_stem(file_name, f"cube_cam{cam_id}")
     hw = hardware_instances.get(cam_id)
@@ -676,6 +763,21 @@ async def execute_hypercube_capture_and_download(cam_id, file_name):
     if is_capturing:
         ui.notify("Another capture is already in progress.", type="warning")
         return
+
+    vial_metadata = None
+    if vial_number is not None:
+        vial_number = vial_number.strip()
+        sample_identifier = (sample_identifier or '').strip().lower()
+        try:
+            vial_metadata = _load_vial_metadata(vial_number)
+            file_name = _next_fly_sample_filename(
+                vial_number,
+                sample_identifier,
+            )
+        except (OSError, ValueError) as error:
+            logger.exception('Could not load vial metadata for %s', vial_number)
+            ui.notify(f'Could not use vial number {vial_number}: {error}', type='negative')
+            return
 
     is_capturing = True
     capture_statuses[cam_id].set_text(
@@ -686,7 +788,15 @@ async def execute_hypercube_capture_and_download(cam_id, file_name):
 
     try:
         crop = _preview_crop_for_capture(cam_id)
-        await run.io_bound(_capture_hypercube, hw, staged_file, crop)
+        await run.io_bound(
+            _capture_hypercube,
+            hw,
+            staged_file,
+            crop,
+            vial_number,
+            vial_metadata,
+            sample_identifier,
+        )
         if cube_path_input is not None:
             cube_path_input.value = staged_file
         ui.download(staged_file, f'{file_name}.npz')
@@ -784,10 +894,35 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                         'Drag the yellow square over the preview to choose an off-center sample.'
                     ).classes('text-sm text-gray-500 mt-1')
                     _update_crop_overlay(cam_id)
-                    file_name = ui.input(
-                        'Output filename',
-                        value=f'capture_cam{cam_id}',
-                    ).classes('w-full mt-2')
+                    with ui.row().classes('w-full items-end gap-2 mt-2'):
+                        file_name = ui.input(
+                            'Output filename',
+                            value=f'capture_cam{cam_id}',
+                        ).classes('flex-grow')
+                        fly_sample = ui.checkbox('Fly sample', value=False)
+                        vial_number = ui.input('Vial number').classes('w-40')
+                        sample_identifier = ui.input('Sample letter').classes('w-32')
+                        vial_number.disable()
+                        sample_identifier.disable()
+                        fly_sample.on_value_change(
+                            lambda event, f=file_name, v=vial_number, s=sample_identifier:
+                                _toggle_fly_sample_fields(
+                                    event,
+                                    f,
+                                    v,
+                                    s,
+                                )
+                        )
+                        vial_number.on_value_change(
+                            lambda _event, f=file_name, v=vial_number, s=sample_identifier:
+                                _set_fly_sample_filename(f, v, s)
+                        )
+                        sample_identifier.on_value_change(
+                            lambda _event, f=file_name, v=vial_number, s=sample_identifier:
+                                _set_fly_sample_filename(f, v, s)
+                            )
+                    fly_sample_checkboxes[cam_id] = fly_sample
+                    vial_number_inputs[cam_id] = vial_number
                     with ui.row().classes('w-full gap-2 mt-4'):
                         ui.button(
                             'Capture & Download (.jpg)',
@@ -804,7 +939,13 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                             ),
                         ).classes('flex-1 bg-green-600 text-white font-bold')
                     ui.button('Capture Hypercube (.npz)', icon='download',
-                              on_click=lambda c=cam_id, n=file_name: execute_hypercube_capture_and_download(c, n.value)
+                              on_click=lambda c=cam_id, n=file_name, f=fly_sample, v=vial_number, s=sample_identifier:
+                              execute_hypercube_capture_and_download(
+                                  c,
+                                  n.value,
+                                  v.value if f.value else None,
+                                  s.value if f.value else None,
+                              )
                              ).classes('w-full mt-2 bg-purple-600 text-white font-bold')
                     capture_statuses[cam_id] = ui.label('Ready to capture.').classes(
                         'text-sm text-gray-500 mt-2'
