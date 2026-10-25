@@ -199,18 +199,31 @@ class CameraHardware:
         self.camera.set_controls(self.camera_settings.to_control_dict())
         self.camera.start()
 
-    def set_focus(self, value: float) -> None:
+    def set_focus(
+        self,
+        value: float,
+        active_channel_name: str | None = None,
+    ) -> None:
         if self.camera is None:
             return
 
-        # Update the dataclass in memory so it persists
         self.camera_settings.lens_position = max(
             0.0,
             min(self.focus_max, float(value)),
         )
-        
-        # Apply the updated setting
-        self.camera.set_controls(self.camera_settings.to_control_dict())
+        controls = self.camera_settings.to_control_dict()
+        if active_channel_name is not None:
+            if active_channel_name not in self.runtime_channels:
+                raise ValueError(f"Unknown spectral channel: {active_channel_name}")
+            controls["LensPosition"] = self._effective_focus(
+                self.camera_settings.lens_position,
+                self.runtime_channels[active_channel_name].config.camera.focus_offset,
+            )
+        self.camera.set_controls(controls)
+
+    def _effective_focus(self, global_focus: float, offset: float) -> float:
+        """Return a channel focus position constrained to the camera range."""
+        return max(0.0, min(self.focus_max, float(global_focus) + float(offset)))
 
     def set_active_channel(self, channel_name: str | None) -> None:
         """Enable one configured channel LED and switch all other LEDs off."""
@@ -237,6 +250,11 @@ class CameraHardware:
         channel = self.runtime_channels[channel_name].config
         self.set_active_channel(channel_name)
         controls = channel.camera.to_control_dict()
+        global_focus = self.camera_settings.lens_position or 0.0
+        controls["LensPosition"] = self._effective_focus(
+            global_focus,
+            channel.camera.focus_offset,
+        )
         controls.pop("ExposureTime", None)
         controls.pop("AnalogueGain", None)
         controls.update({"AeEnable": True, "AwbEnable": False})

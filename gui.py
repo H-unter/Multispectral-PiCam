@@ -71,6 +71,7 @@ band_title: Any = None
 focus_sliders = {}
 focus_min_inputs = {}
 focus_max_inputs = {}
+focus_details = {}
 channel_selector: Any = None
 test_channel_selector: Any = None
 test_snap_image: Any = None
@@ -144,6 +145,30 @@ async def _update_focus_range(cam_id: str) -> None:
     slider.set_value(current)
     slider.update()
     await update_focus(cam_id, current)
+
+
+def _update_focus_detail(cam_id: str, base_focus: float | None = None) -> None:
+    detail = focus_details.get(cam_id)
+    hardware = hardware_instances.get(cam_id)
+    if detail is None or hardware is None:
+        return
+
+    base = (
+        float(base_focus)
+        if base_focus is not None
+        else float(hardware.camera_settings.lens_position or 0.0)
+    )
+    offset = 0.0
+    channel_description = 'no channel selected'
+    if selected_channel_name is not None:
+        channel = SPECTRAL_CHANNELS[selected_channel_name]
+        offset = float(channel.camera.focus_offset)
+        channel_description = selected_channel_name
+    applied = max(0.0, min(hardware.focus_max, base + offset))
+    detail.set_text(
+        f'Base: {base:.2f} | Channel offset ({channel_description}): '
+        f'{offset:+.2f} | Applied preview focus: {applied:.2f}'
+    )
 
 
 def _crop_preview_size(crop_size: int) -> float:
@@ -505,9 +530,31 @@ async def update_focus(cam_id, value):
     hw = hardware_instances.get(cam_id)
     if hw and hw.is_ready and not is_capturing:
         try:
-            await run.io_bound(hw.set_focus, float(value))
+            await run.io_bound(hw.set_focus, float(value), selected_channel_name)
+            _update_focus_detail(cam_id, float(value))
         except Exception:
             logger.exception("Focus update failed for camera %s", cam_id)
+
+
+def apply_channel_focus_offset(channel_name: str | None) -> None:
+    if (
+        channel_name is None
+        or channel_name != selected_channel_name
+        or is_capturing
+    ):
+        return
+    for hw in hardware_instances.values():
+        if hw.is_ready and hw.camera_settings.lens_position is not None:
+            try:
+                hw.set_focus(hw.camera_settings.lens_position, channel_name)
+            except Exception:
+                logger.exception(
+                    "Could not apply focus offset for channel %s",
+                    channel_name,
+                )
+    for cam_id in hardware_instances:
+        _update_focus_detail(cam_id)
+
 
 def update_channel_current(channel_name, value):
     if is_capturing:
@@ -565,6 +612,10 @@ def select_channel(channel_name):
             return
         for hw in ready_hardware:
             hw.set_active_channel(channel_name)
+            if hw.camera_settings.lens_position is not None:
+                hw.set_focus(hw.camera_settings.lens_position, channel_name)
+        for cam_id in hardware_instances:
+            _update_focus_detail(cam_id)
         ui.notify(
             f"Active channel: {channel_name or 'all LEDs off'}",
             type="positive",
@@ -875,6 +926,11 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                             'value',
                             backward=lambda v: f'{v:.1f}' if v is not None else '-',
                         ).classes('font-mono w-8 text-right')
+
+                    focus_details[cam_id] = ui.label().classes(
+                        'text-xs text-gray-500 font-mono w-full'
+                    )
+                    _update_focus_detail(cam_id)
                     
                     ui.separator().classes('my-2 w-full')
                     ui.label('Capture').classes('font-bold text-gray-700 mt-2')
@@ -1027,6 +1083,16 @@ with ui.tab_panels(tabs, value=general_tab).classes('w-full bg-transparent'):
                         f'Camera exposure limit: {exposure_limit_us:,} µs '
                         f'({exposure_limit_us / 1000:g} ms)'
                     ).classes('text-xs text-gray-500 mb-2')
+                    ui.number(
+                        'Focus Offset (diopters)',
+                        format='%.2f',
+                        step=0.05,
+                        on_change=lambda _event, name=channel.name:
+                            apply_channel_focus_offset(name),
+                    ).bind_value(
+                        channel.camera,
+                        'focus_offset',
+                    ).classes('w-full mb-2')
 
                     # --- Driver Settings Binding ---
                     ui.label('Driver Settings').classes('text-sm font-bold text-gray-700 mb-1')

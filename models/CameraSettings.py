@@ -11,6 +11,7 @@ class CameraSettings:
     af_mode: Optional[int] = None # Auto Focus
     lens_position: Optional[float] = None # Lens Position
     colour_gains: Optional[tuple[float, float]] = None # Colour Gains
+    focus_offset: float = 0.0 # Channel-specific focus offset in diopters
 
     def to_control_dict(self) -> dict:
         """Translates the dataclass into a Picamera2-compatible dictionary."""

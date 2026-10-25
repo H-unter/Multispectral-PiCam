@@ -88,92 +88,92 @@ SPECTRAL_CHANNELS = SpectralChannelCollection([
         name="0_1020nm_IR",
         led=LED_name_to_LEDAttributes['MT51020-IR'],
         driver=LedDrivingSettings(tlc5940_channel=0, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=1.1) # 6.8 - 5.7
     ),
     SpectralChannel(
         name="1_950nm_IR",
         led=LED_name_to_LEDAttributes['MTE9460C2'],
         driver=LedDrivingSettings(tlc5940_channel=1, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=1.1) # 6.8
     ),
     SpectralChannel(
         name="2_880nm_IR",
         led=LED_name_to_LEDAttributes['XTHI30W'],
         driver=LedDrivingSettings(tlc5940_channel=2, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=1.1) # 6.8
     ),
     SpectralChannel(
         name="3_860nm_IR",
         led=LED_name_to_LEDAttributes['SFH_4356'],
         driver=LedDrivingSettings(tlc5940_channel=3, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=1.1) # 6.8
     ),
     SpectralChannel(
         name="4_810nm_IR",
         led=LED_name_to_LEDAttributes['MTE1081C'],
         driver=LedDrivingSettings(tlc5940_channel=4, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=0.1) # 5.8
     ),
     SpectralChannel(
         name="5_765nm_IR",
         led=LED_name_to_LEDAttributes['MTE2077N1-R'],
         driver=LedDrivingSettings(tlc5940_channel=5, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=0.6) # 6.3
     ),
     SpectralChannel(
         name="6_740nm_IR",
         led=LED_name_to_LEDAttributes['MTE1074N1-R'],
         driver=LedDrivingSettings(tlc5940_channel=6, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=0.6) # 6.3
     ),
     SpectralChannel(
         name="7_680nm_R",
         led=LED_name_to_LEDAttributes['MTE6800N2-UR'],
         driver=LedDrivingSettings(tlc5940_channel=7, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=1.1) # 6.8
     ),
     SpectralChannel(
         name="8_640nm_R",
         led=LED_name_to_LEDAttributes['MTE7063C2-UR'],
         driver=LedDrivingSettings(tlc5940_channel=8, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=0.5) # 6.2
     ),
     SpectralChannel(
         name="9_606nm_R",
         led=LED_name_to_LEDAttributes['BL-B8141-TRS20A'],
         driver=LedDrivingSettings(tlc5940_channel=9, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=0.1) # 5.8
     ),
     SpectralChannel(
         name="10_568nm_G",
         led=LED_name_to_LEDAttributes['151031VS06000'],
         driver=LedDrivingSettings(tlc5940_channel=10, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=0.0) # 5.7
     ),
     SpectralChannel(
         name="11_505nm_G",
         led=LED_name_to_LEDAttributes['XSCGS43MB'],
         driver=LedDrivingSettings(tlc5940_channel=11, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=0.0) # 5.7
     ),
     SpectralChannel(
         name="12_460nm_B",
         led=LED_name_to_LEDAttributes['WP710A10QBC-D'],
         driver=LedDrivingSettings(tlc5940_channel=12, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=0.0) # 5.7
     ),
     SpectralChannel(
         name="13_400nm_UV",
         led=LED_name_to_LEDAttributes['MT0380-UV-A'],
         driver=LedDrivingSettings(tlc5940_channel=13, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=0.0) # 5.7
     ),
     SpectralChannel(
         name="14_385nm_UV",
         led=LED_name_to_LEDAttributes['VAOL-5GUV8T4'],
         driver=LedDrivingSettings(tlc5940_channel=14, drive_current_ma=10),
-        camera=CameraSettings(exposure_time_us=60000)
-    ),
+        camera=CameraSettings(exposure_time_us=60000, focus_offset=0.0) # 5.7
+    )
     # RESERVED FOR THE WHITE CHANNEL
     # SpectralChannel(
     #     name="red_led_15",
